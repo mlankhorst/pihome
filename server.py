@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, gi, os
+import sys, gi, os, socket
 
 gi.require_version('Gst', '1.0')
 gi.require_version('GstBase', '1.0')
@@ -53,6 +53,16 @@ class Controller:
     def __init__(self):
         Gst.init(sys.argv)
         self.mainloop = GLib.MainLoop()
+        self.socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        self.socket.bind(('', 6780))
+        self.socket.listen(8)
+        self.socket.setblocking(0)
+        self.conns = {}
+        self.savemsgs = {}
+
+        GLib.io_add_watch(self.socket.fileno(),
+                          GLib.IO_IN | GLib.IO_ERR | GLib.IO_HUP,
+                          self.server_msg)
 
         _unlink("/tmp/cam1v")
         _unlink("/tmp/cam3v")
@@ -163,6 +173,49 @@ class Controller:
                     elif new == Gst.State.NULL:
                         _unlink("/tmp/snd.mp3")
 
+    def server_msg(self, source, cond):
+        if (cond & GLib.IO_IN):
+            client, addr = self.socket.accept()
+            client.setblocking(0)
+            self.conns[client.fileno()] = client
+            self.savemsgs[client.fileno()] = None
+            GLib.io_add_watch(client.fileno(),
+                              GLib.IO_IN | GLib.IO_ERR | GLib.IO_HUP,
+                              self.client_msg)
+            print("New client from ", addr)
+        else:
+            print("cond: %x\n" % cond)
+
+        return True
+
+    def client_msg(self, source, cond):
+        socket = self.conns[source]
+
+        if cond & GLib.IO_IN:
+            ba = socket.recv(4096)
+            if not ba:
+                cond |= GLib.IO_HUP
+
+            if self.savemsgs[source]:
+                ba = self.savemsgs[source] + ba
+
+            nl = ba.find(b'\n')
+            while nl >= 0:
+                str = ba[0:nl].decode(errors='replace')
+                print('Bla bla: %s' % str)
+                ba = ba[nl+1:]
+                nl = ba.find(b'\n')
+
+            self.savemsgs[source] = ba
+
+        if cond & (GLib.IO_ERR | GLib.IO_HUP):
+            socket.close()
+            del self.conns[source]
+            del self.savemsgs[source]
+            return False
+
+        return True
+
     def shutdown(self):
         self.cam1.shutdown()
         self.cam3.shutdown()
@@ -170,6 +223,14 @@ class Controller:
         self.snd.set_state(Gst.State.NULL)
 
         self.mainloop.quit()
+
+        self.socket.close()
+
+        for socket in self.conns:
+            socket.close()
+
+        self.conns = {}
+        self.savemsgs = {}
 
     def run(self):
         self.snd.set_state(Gst.State.PLAYING)
