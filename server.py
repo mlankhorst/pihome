@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, gi, os, socket
+import sys, gi, os, socket, time
 
 gi.require_version('Gst', '1.0')
 gi.require_version('GstBase', '1.0')
@@ -24,20 +24,41 @@ class Camera:
                 prev, new, pending = event.parse_state_changed()
                 if pending == Gst.State.VOID_PENDING:
                     print("New state: %s " % new)
+                    if new == Gst.State.NULL:
+                        shmsink = self.cam.get_by_name('shmsink')
+                        _unlink(shmsink.get_property('socket-path'))
             elif event.type == Gst.MessageType.EOS:
                 self.shutdown()
             else:
-                print(event.type)
+                print('Streaming event: ', event.type)
         return
 
     def save_message(self, obj, event):
         if event.src == self.save:
-            print(event)
+            if event.type == Gst.MessageType.STATE_CHANGED:
+                prev, new, pending = event.parse_state_changed()
+                if pending == Gst.State.VOID_PENDING:
+                    print("New recording state: %s " % new)
+            elif event.type == Gst.MessageType.EOS:
+                print('Received end of stream, shutting down recording.')
+                self.save.set_state(Gst.State.NULL)
+            else:
+                print('Recording event: ', event.type)
         return
+
+    def startrecord(self):
+        if self.save.get_state(0)[1] != Gst.State.NULL:
+            return
+
+        filename = time.strftime('/home/pi/video-%Y-%02m-%02d-%02H-%02M.mp4')
+        filesink = self.save.get_by_name('file')
+        filesink.set_property('location', filename)
+
+        self.save.set_state(Gst.State.PLAYING)
 
     def stoprecord(self):
         if self.save.get_state(0)[1] > Gst.State.NULL:
-            self.save.emit('event', Gst.event_new_eos())
+            self.save.send_event(Gst.Event.new_eos())
 
     def shutdown(self):
         self.stoprecord()
@@ -48,6 +69,16 @@ class Camera:
         self.save.get_bus().connect("message", self.save_message)
 
         self.cam.set_state(Gst.State.PLAYING)
+
+    def run_command(self, socket, cmd):
+        if cmd == 'save':
+            self.startrecord()
+            socket.send(b'OK\n')
+        elif cmd == 'done':
+            self.stoprecord()
+            socket.send(b'OK\n')
+        else:
+            socket.send(b'Unknown command: ' + cmd.split(' ', 1)[0].encode() + b'\n')
 
 class Controller:
     def __init__(self):
@@ -86,11 +117,11 @@ class Controller:
              "uvch264src auto-start=true mode=2 rate-control=vbr "
                         "iframe-period=2000 post-previews=false "
                         "initial-bitrate=2000000 peak-bitrate=4500000 "
-                        "average-bitrate=3000000 name=src do-timestamp=1"
-             "src.vfsrc ! image/jpeg,framerate=30/1 ! fakesink sync=false async=false qos=false "
-             "src.vidsrc ! video/x-h264,width=1280,height=720,framerate=30/1,stream-format=byte-stream ! "
+                        "average-bitrate=3000000 name=uvch264src do-timestamp=1"
+             "uvch264src.vfsrc ! image/jpeg,framerate=30/1 ! fakesink sync=false async=false qos=false "
+             "uvch264src.vidsrc ! video/x-h264,width=1280,height=720,framerate=30/1,stream-format=byte-stream ! "
              "tee name = t1 ! pay. "
-             "t1. ! shmsink socket-path=/tmp/cam1v async=0 qos=0 sync=0 wait-for-connection=0"
+             "t1. ! shmsink socket-path=/tmp/cam1v async=0 qos=0 sync=0 wait-for-connection=0 name=shmsink"
              " "
              "rtpbin name=rtpbin do-retransmission=true"
              " "
@@ -108,12 +139,12 @@ class Controller:
              "udpsrc address=0.0.0.0 port=2217 ! rtpbin.recv_rtcp_sink_1"))
 
         cam3 = Gst.parse_launch((
-             "rpicamsrc name=camsrc do-timestamp=true hflip=1 vflip=1 preview=0 ! "
+             "rpicamsrc name=rpicamsrc do-timestamp=true hflip=1 vflip=1 preview=0 ! "
              "video/x-h264,width=1280,height=720,framerate=1/60,profile=high ! "
              "h264parse config-interval=1 ! "
              "video/x-h264,stream-format=byte-stream,alignment=au ! "
              "tee name=t1 ! pay. "
-             "t1. ! shmsink socket-path=/tmp/cam3v async=0 qos=0 sync=0 wait-for-connection=0"
+             "t1. ! shmsink socket-path=/tmp/cam3v async=0 qos=0 sync=0 wait-for-connection=0 name=shmsink"
              " "
              "rtpbin name=rtpbin do-retransmission=true"
              " "
@@ -147,19 +178,11 @@ class Controller:
 
     def cam1_message(self, obj, event):
         if event.src == self.cam1.cam:
-            if event.type == Gst.MessageType.STATE_CHANGED:
-                prev, new, pending = event.parse_state_changed()
-                if pending == Gst.State.VOID_PENDING:
-                    if new == Gst.State.NULL:
-                        _unlink("/tmp/cam1v")
+            return
 
     def cam3_message(self, obj, event):
         if event.src == self.cam3.cam:
-            if event.type == Gst.MessageType.STATE_CHANGED:
-                prev, new, pending = event.parse_state_changed()
-                if pending == Gst.State.VOID_PENDING:
-                    if new == Gst.State.NULL:
-                        _unlink("/tmp/cam3v")
+            return
 
     def snd_message(self, obj, event):
         if event.src == self.snd:
@@ -202,7 +225,7 @@ class Controller:
             nl = ba.find(b'\n')
             while nl >= 0:
                 str = ba[0:nl].decode(errors='replace')
-                print('Bla bla: %s' % str)
+                self.run_command(socket, str)
                 ba = ba[nl+1:]
                 nl = ba.find(b'\n')
 
@@ -215,6 +238,18 @@ class Controller:
             return False
 
         return True
+
+    def run_command(self, socket, str):
+        if str.startswith(':'):
+            cam, cmd = str.split(' ', 1)
+            if cam == ':cam1':
+                self.cam1.run_command(socket, cmd)
+            elif cam == ':cam3':
+                self.cam3.run_command(socket, cmd)
+            else:
+                socket.send(b'Invalid camera ' + cam[1:].encode() + b'\n')
+            return
+        return
 
     def shutdown(self):
         self.cam1.shutdown()
