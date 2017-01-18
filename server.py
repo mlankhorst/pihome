@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, gi, os, socket, time
+import sys, gi, os, socket, time, subprocess
 
 gi.require_version('Gst', '1.0')
 gi.require_version('GstBase', '1.0')
@@ -20,8 +20,14 @@ class Camera:
 
     def cam_message(self, obj, event):
         if event.src == self.cam:
-            if event.type == Gst.MessageType.STATE_CHANGED:
-                prev, new, pending = event.parse_state_changed()
+            if event.type == Gst.MessageType.STATE_CHANGED or \
+               event.type == Gst.MessageType.ASYNC_DONE:
+                if event.type == Gst.MessageType.STATE_CHANGED:
+                    prev, new, pending = event.parse_state_changed()
+                else:
+                    new = event.src.get_state(0)[0]
+                    pending = event.src.get_state(0)[1]
+
                 if pending == Gst.State.VOID_PENDING:
                     print("New state: %s " % new)
                     if new == Gst.State.NULL:
@@ -70,15 +76,131 @@ class Camera:
 
         self.cam.set_state(Gst.State.PLAYING)
 
-    def run_command(self, socket, cmd):
+    def night_mode(self):
+        cam = self.cam.get_by_name('uvch264src')
+        if cam:
+            dev = cam.get_property('device')
+
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                            ('brightness=140,saturation=140,contrast=0'
+                             'gain=255,focus_auto=0,exposure_auto=1')])
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                             'focus_absolute=30,exposure_absolute=2047'])
+        else:
+            cam = self.cam.get_by_name('rpicamsrc')
+
+            cam.set_property('saturation', -100)
+            cam.set_property('brightness', 60)
+            cam.set_property('contrast', 20)
+            cam.set_property('exposure-mode', 'night')
+            cam.set_property('iso', 1600)
+            cam.set_property('drc', 3)
+            cam.set_property('metering-mode', 'spot')
+            cam.set_property('sensor-mode', 5)
+            cam.set_property('quantisation-parameter', 15)
+            cam.set_property('bitrate', 0)
+            cam.set_property('awb-mode', 0)
+            cam.set_property('awb-gain-red', 2.)
+            cam.set_property('awb-gain-blue', 2.)
+            cam.set_property('shutter-speed', 250000) # in us
+
+    def day_mode(self):
+        cam = self.cam.get_by_name('uvch264src')
+        if cam:
+            dev = cam.get_property('device')
+
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                            ('brightness=127,saturation=127,contrast=0'
+                             'gain=255,focus_auto=0,exposure_auto=3')])
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                             'focus_absolute=30'])
+        else:
+            cam = self.cam.get_by_name('rpicamsrc')
+
+            cam.set_property('saturation', 0)
+            cam.set_property('brightness', 50)
+            cam.set_property('contrast', 0)
+            cam.set_property('exposure-mode', 'auto')
+            cam.set_property('iso', 0)
+            cam.set_property('drc', 0)
+            cam.set_property('metering-mode', 1)
+            cam.set_property('sensor-mode', 5)
+            cam.set_property('quantisation-parameter', 15)
+            cam.set_property('bitrate', 0)
+            cam.set_property('awb-mode', 'tungsten')
+            cam.set_property('shutter-speed', 0) # Variable exposure
+
+    def shimmer_mode(self):
+        cam = self.cam.get_by_name('uvch264src')
+        if cam:
+            dev = cam.get_property('device')
+
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                            ('brightness=127,saturation=127,contrast=0'
+                             'gain=255,focus_auto=0,exposure_auto=1')])
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c',
+                             'focus_absolute=30,exposure_absolute=2047'])
+        else:
+            cam = self.cam.get_by_name('rpicamsrc')
+
+            cam.set_property('saturation', -100)
+            cam.set_property('brightness', 60)
+            cam.set_property('contrast', 20)
+            cam.set_property('exposure-mode', 'night')
+            cam.set_property('iso', 1600)
+            cam.set_property('drc', 3)
+            cam.set_property('metering-mode', 'spot')
+            cam.set_property('sensor-mode', 5)
+            cam.set_property('quantisation-parameter', 15)
+            cam.set_property('bitrate', 0)
+            cam.set_property('awb-mode', 0)
+            cam.set_property('awb-gain-red', 2.)
+            cam.set_property('awb-gain-blue', 2.)
+            cam.set_property('shutter-speed', 0) # variable
+
+    def setprop(self, key, value):
+        cam = self.cam.get_by_name('uvch264src')
+        if cam:
+            dev = cam.get_property('device')
+
+            subprocess.call(['v4l2-ctl', '-d', dev, '-c', '%s=%s' % (key, value)])
+        else:
+            cam = self.cam.get_by_name('rpicamsrc')
+
+            try:
+                val = int(value)
+            except ValueError:
+                val = value
+
+            cam.set_property(key, val)
+
+    def run_command(self, socket, data):
+        if ' ' in data:
+            cmd, args = data.split(' ',  1)
+        else:
+            cmd = data
+
         if cmd == 'save':
             self.startrecord()
-            socket.send(b'OK\n')
         elif cmd == 'done':
             self.stoprecord()
-            socket.send(b'OK\n')
+        elif cmd == 'night':
+            self.night_mode()
+        elif cmd == 'day':
+            self.day_mode()
+        elif cmd == 'shimmer':
+            self.shimmer_mode()
+        elif cmd == 'setprop':
+            if not '=' in args or ' ' in args:
+                socket.write(b'Syntax: setprop key=value\n')
+                return
+
+            key, value = args.split('=', 1)
+            self.setprop(key, value)
         else:
             socket.send(b'Unknown command: ' + cmd.split(' ', 1)[0].encode() + b'\n')
+            return
+        socket.send(b'OK\n')
 
 class Controller:
     def __init__(self):
@@ -121,11 +243,11 @@ class Controller:
              "uvch264src.vfsrc ! image/jpeg,framerate=30/1 ! fakesink sync=false async=false qos=false "
              "uvch264src.vidsrc ! video/x-h264,width=1280,height=720,framerate=30/1,stream-format=byte-stream ! "
              "tee name = t1 ! pay. "
-             "t1. ! shmsink socket-path=/tmp/cam1v async=0 qos=0 sync=0 wait-for-connection=0 name=shmsink"
+             "t1. ! h264parse ! shmsink socket-path=/tmp/cam1v async=0 qos=0 sync=0 wait-for-connection=0 name=shmsink"
              " "
              "rtpbin name=rtpbin do-retransmission=true"
              " "
-             "rtph264pay name=pay config-interval=1 ! rtpbin.send_rtp_sink_0"
+             "h264parse name=pay ! rtph264pay config-interval=1 ! rtpbin.send_rtp_sink_0"
              " "
              "shmsrc socket-path=/tmp/snd.mp3 do-timestamp=1 !"
              "audio/mpeg,mpegversion=1 ! mpegaudioparse ! queue ! rtpmpapay ! rtpbin.send_rtp_sink_1"
@@ -140,7 +262,7 @@ class Controller:
 
         cam3 = Gst.parse_launch((
              "rpicamsrc name=rpicamsrc do-timestamp=true hflip=1 vflip=1 preview=0 ! "
-             "video/x-h264,width=1280,height=720,framerate=1/60,profile=high ! "
+             "video/x-h264,width=1280,height=720,framerate=0/1,profile=high ! "
              "h264parse config-interval=1 ! "
              "video/x-h264,stream-format=byte-stream,alignment=au ! "
              "tee name=t1 ! pay. "
