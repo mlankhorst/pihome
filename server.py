@@ -82,7 +82,7 @@ class Camera:
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
-                            ('brightness=140,saturation=140,contrast=0'
+                            ('brightness=140,saturation=140,contrast=0,'
                              'gain=255,focus_auto=0,exposure_auto=1')])
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30,exposure_absolute=2047'])
@@ -110,7 +110,7 @@ class Camera:
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
-                            ('brightness=127,saturation=127,contrast=0'
+                            ('brightness=128,saturation=128,contrast=128'
                              'gain=255,focus_auto=0,exposure_auto=3')])
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30'])
@@ -136,7 +136,7 @@ class Camera:
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
-                            ('brightness=127,saturation=127,contrast=0'
+                            ('brightness=128,saturation=128,contrast=128,'
                              'gain=255,focus_auto=0,exposure_auto=1')])
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30,exposure_absolute=2047'])
