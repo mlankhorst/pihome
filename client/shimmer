@@ -1,0 +1,5 @@
+#!/bin/bash
+
+echo -e ':cam1 shimmer\n:cam3 shimmer' | nc -v localhost 6780 && exit 0
+
+exit $?

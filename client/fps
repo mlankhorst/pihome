@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# Used to tune fps in night mode, to set 10 fps, "fps 10",
+# to set 1 frame per 2 seconds: fps 1 2
+#
+# In theory, the camera can go up to 1 frame per 10 seconds, but
+# that seems to hang. 3 seconds for 1 frame is safe. 4 seconds
+# appears to hang.
+
+if [ -n "$1" -a "$1" -lt 40 ]; then
+	if [ -z "$2" ]; then div=1; else div="$2"; fi
+
+	ss=$[1000000 * div / $1]
+
+	echo -e ":cam3 night\n:cam3 setprop shutter-speed=$ss" | nc -v cam3 6780 
+else
+	echo "Usage: $0 <fps> (seconds)"
+	echo "For .5 fps (1 frame per 2 seconds: $0 1 2"
+	exit 1
+fi
+
