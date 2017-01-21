@@ -84,7 +84,7 @@ class Viewer:
         if args.no_video:
             audio_index=0
 
-        rtpbin="rtpbin name=rtpsession"
+        rtpbin="rtpbin name=rtpsession drop-on-latency=1 latency=50"
 
         if not args.no_video:
             video = (
