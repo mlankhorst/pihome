@@ -3,9 +3,8 @@
 import sys, gi, os, socket, time, subprocess
 
 gi.require_version('Gst', '1.0')
-gi.require_version('GstBase', '1.0')
 gi.require_version('GLib', '2.0')
-from gi.repository import GObject, Gst, GstBase, GLib, GObject
+from gi.repository import GObject, Gst, GstRtspServer, GLib, GObject
 
 def _unlink(what):
     try:
@@ -14,9 +13,10 @@ def _unlink(what):
         return
 
 class Camera:
-    def __init__(self, cam, save):
+    def __init__(self, cam, save, stream):
         self.cam = cam
         self.save = save
+        self.stream = stream
 
     def cam_message(self, obj, event):
         if event.src == self.cam:
@@ -50,7 +50,21 @@ class Camera:
                 self.save.set_state(Gst.State.NULL)
             else:
                 print('Recording event: ', event.type)
-        return
+
+    def stream_message(self, obj, event):
+        if event.src == self.stream:
+            if event.type == Gst.MessageType.STATE_CHANGED:
+                prev, new, pending = event.parse_state_changed()
+                if pending == Gst.State.VOID_PENDING:
+                    print("New streaming state: %s " % new)
+            else:
+                print('Streaming event: ', event.type)
+        else:
+            if event.type == Gst.MessageType.ERROR:
+                gthing, debug = event.parse_error()
+                print('Streaming error: ', gthing, debug)
+            else:
+                print('Streaming element event: ', event.type)
 
     def startrecord(self):
         if self.save.get_state(0)[1] != Gst.State.NULL:
@@ -66,13 +80,33 @@ class Camera:
         if self.save.get_state(0)[1] > Gst.State.NULL:
             self.save.send_event(Gst.Event.new_eos())
 
+    def startstream(self, url, text):
+        cam = self.cam.get_by_name('rpicamsrc')
+        if cam and text:
+            cam.set_property('annotation-mode', 1)
+            cam.set_property('annotation-text', text)
+
+        rtmpsink = self.stream.get_by_name('rtmpsink0')
+        rtmpsink.set_property('location', url)
+
+        self.stream.set_state(Gst.State.PLAYING)
+
+    def stopstream(self):
+        cam = self.cam.get_by_name('rpicamsrc')
+        if cam:
+            cam.set_property('annotation-mode', 0)
+
+        self.stream.set_state(Gst.State.NULL)
+
     def shutdown(self):
+        self.stopstream()
         self.stoprecord()
         self.cam.set_state(Gst.State.NULL)
 
     def run(self):
         self.cam.get_bus().connect("message", self.cam_message)
         self.save.get_bus().connect("message", self.save_message)
+        self.stream.get_bus().connect("message", self.stream_message)
 
         self.cam.set_state(Gst.State.PLAYING)
 
@@ -179,6 +213,7 @@ class Camera:
             cmd, args = data.split(' ',  1)
         else:
             cmd = data
+            args = None
 
         if cmd == 'save':
             self.startrecord()
@@ -197,6 +232,20 @@ class Camera:
 
             key, value = args.split('=', 1)
             self.setprop(key, value)
+        elif cmd == 'startstream':
+            if not args:
+                socket.send(b'Syntax: startstream rtmp://stream <annotation text>\n')
+                return
+
+            if ' ' in args:
+                url, text = args.split(' ', 1)
+            else:
+                url = args
+                text = None
+
+            self.startstream(url, text)
+        elif cmd == 'stopstream':
+            self.stopstream()
         else:
             socket.send(b'Unknown command: ' + cmd.split(' ', 1)[0].encode() + b'\n')
             return
@@ -212,6 +261,10 @@ class Controller:
         self.socket.setblocking(0)
         self.conns = {}
         self.savemsgs = {}
+        self.rtsp_server = GstRtspServer.RTSPServer.new()
+        self.rtsp_server.set_service('8080')
+        self.mount_points = self.rtsp_server.get_mount_points()
+        self.rtsp_server.attach(None)
 
         GLib.io_add_watch(self.socket.fileno(),
                           GLib.IO_IN | GLib.IO_ERR | GLib.IO_HUP,
@@ -220,6 +273,22 @@ class Controller:
         _unlink("/tmp/cam1v")
         _unlink("/tmp/cam3v")
         _unlink("/tmp/snd.mp3")
+
+        stream1 = Gst.parse_launch((
+             "shmsrc socket-path=/tmp/cam1v do-timestamp=0 ! video/x-h264,stream-format=byte-stream,alignment=au,profile=high,framerate=30/1,width=1280,height=720 ! h264parse ! queue ! mux.video "
+             " "
+             "flvmux name=mux streamable=true ! "
+             "rtmpsink name=rtmpsink0 qos=false sync=false async=false "
+             " "
+             " shmsrc socket-path=/tmp/snd.mp3 ! audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! mpegaudioparse ! queue ! mux.audio"))
+
+        stream3 = Gst.parse_launch((
+             "shmsrc socket-path=/tmp/cam3v do-timestamp=0 ! video/x-h264,stream-format=byte-stream,alignment=au,profile=high,framerate=40/1,width=1280,height=720 ! h264parse ! queue ! mux.video "
+             " "
+             "flvmux name=mux streamable=true ! "
+             "rtmpsink name=rtmpsink0 qos=false sync=false async=false "
+             " "
+             " shmsrc socket-path=/tmp/snd.mp3 ! audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! mpegaudioparse ! queue ! mux.audio"))
 
         save1 = Gst.parse_launch((
              "shmsrc name=camsrc is-live=0 do-timestamp=true socket-path=/tmp/cam1v ! "
@@ -234,6 +303,20 @@ class Controller:
              "h264parse config-interval=-1 ! mp4mux name=mux ! filesink name=file async=0 sync=0 qos=0 "
              "shmsrc socket-path=/tmp/snd.mp3 do-timestamp=1 is-live=1 ! "
              "audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! mpegaudioparse ! queue ! mux."))
+
+        rtsp1 = (
+             "shmsrc name=camsrc is-live=0 do-timestamp=true socket-path=/tmp/cam1v ! "
+             "video/x-h264,stream-format=byte-stream,alignment=au,profile=high,width=1280,height=720 ! "
+             "h264parse config-interval=-1 ! rtph264pay name=pay0 "
+             "shmsrc socket-path=/tmp/snd.mp3 do-timestamp=1 is-live=1 ! "
+             "audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! mpegaudioparse ! queue ! rtpmpapay name=pay1")
+
+        rtsp3 = (
+             "shmsrc name=camsrc is-live=0 do-timestamp=true socket-path=/tmp/cam3v ! "
+             "video/x-h264,stream-format=byte-stream,alignment=au,profile=high,width=1280,height=720 ! "
+             "h264parse config-interval=-1 ! rtph264pay name=pay0 "
+             "shmsrc socket-path=/tmp/snd.mp3 do-timestamp=1 is-live=1 ! "
+             "audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! mpegaudioparse ! queue ! rtpmpapay name=pay1")
 
         cam1 = Gst.parse_launch((
              "uvch264src auto-start=true mode=2 rate-control=vbr "
@@ -288,14 +371,24 @@ class Controller:
              "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
              "lamemp3enc ! shmsink wait-for-connection=0 socket-path=/tmp/snd.mp3 shm-size=4194304 sync=0 async=0 qos=0"))
 
-        self.cam1 = Camera(cam1, save1)
-        self.cam3 = Camera(cam3, save3)
+        self.cam1 = Camera(cam1, save1, stream1)
+        self.cam3 = Camera(cam3, save3, stream3)
+
+        self.rtsp1 = GstRtspServer.RTSPMediaFactory()
+        self.rtsp1.set_shared(True)
+        self.rtsp1.set_launch(rtsp1)
+        self.mount_points.add_factory('/cam1', self.rtsp1)
+
+        self.rtsp3 = GstRtspServer.RTSPMediaFactory()
+        self.rtsp3.set_shared(True)
+        self.rtsp3.set_launch(rtsp3)
+        self.mount_points.add_factory('/cam3', self.rtsp3)
 
         cam1.get_bus().connect("message", self.cam1_message)
         cam3.get_bus().connect("message", self.cam3_message)
         self.snd.get_bus().connect("message", self.snd_message)
 
-        for pipeline in [self.snd, cam1, cam3, save1, save3]:
+        for pipeline in [self.snd, cam1, cam3, save1, save3, stream1, stream3]:
             pipeline.get_bus().add_signal_watch()
 
     def cam1_message(self, obj, event):
