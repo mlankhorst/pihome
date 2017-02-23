@@ -168,9 +168,14 @@ class Camera:
 
     def run(self):
         self.cam.get_bus().connect("message", self.cam_message)
-        self.save.get_bus().connect("message", self.save_message)
+        self.cam.get_bus().add_signal_watch()
+
         self.save.get_by_name("mux").connect("format-location", self.save_location)
+        self.save.get_bus().connect("message", self.save_message)
+        self.save.get_bus().add_signal_watch()
+
         self.stream.get_bus().connect("message", self.stream_message)
+        self.stream.get_bus().add_signal_watch()
 
         self.cam.set_state(Gst.State.PLAYING)
 
