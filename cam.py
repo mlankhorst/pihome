@@ -39,13 +39,14 @@ def initialize_cam(name, settings):
     else:
         vidcaps += ', alignment=au, profile=constrained-baseline'
 
-    vidshmsrc = 'shmsrc name=camsrc is-live=0 do-timestamp=1 socket-path=%s ! %s' % (vidsocket, vidcaps)
+    vidshmsrc = 'shmsrc name=camsrc is-live=1 do-timestamp=1 socket-path=%s ! %s' % (vidsocket, vidcaps)
     sndshmsrc = settings['audio_pipe']
 
     if settings['video_source'] == 'rpicamsrc':
         shmsink = Gst.parse_launch((
             'rpicamsrc do-timestamp=1 rotation=180 preview=0 inline-headers=1'
-            ' name=rpicamsrc ! %s, framerate=0/1, alignment=nal ! '
+            ' bitrate=0 quantisation-parameter=25 name=rpicamsrc ! '
+            '%s, framerate=0/1 ! h264parse ! '
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
             % (vidcaps, vidsocket)))
     elif settings['video_source'] == 'uvch264src':
@@ -131,7 +132,9 @@ class Camera:
                 print('Streaming element event: ', event.type)
 
     def save_location(self, splitmux, fragment_id):
-        return time.strftime('/home/pi/vids/' + self.name + '-video-%Y-%02m-%02d-%02H-%02M.mp4')
+        file = time.strftime('~/' + self.name + '-video-%Y-%02m-%02d-%02H-%02M.mp4')
+
+        return os.path.expanduser(file)
 
     def startrecord(self):
         if self.save.get_state(0)[1] != Gst.State.NULL:
@@ -295,8 +298,8 @@ class Camera:
         elif cmd == 'shimmer':
             self.shimmer_mode()
         elif cmd == 'setprop':
-            if not '=' in args or ' ' in args:
-                socket.write(b'Syntax: setprop key=value\n')
+            if not args or not '=' in args or ' ' in args:
+                socket.send(b'Syntax: setprop key=value\n')
                 return
 
             key, value = args.split('=', 1)
