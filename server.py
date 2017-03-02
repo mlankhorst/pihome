@@ -26,6 +26,7 @@ class Controller:
         self.savemsgs = {}
         self.rtsp_server = GstRtspServer.RTSPServer.new()
         self.rtsp_server.set_service('8080')
+        self.rtsp_server.set_address('::')
         self.rtsp_server.attach(None)
 
         GLib.io_add_watch(self.socket.fileno(),
@@ -37,20 +38,26 @@ class Controller:
         self.snd = Gst.parse_launch((
              "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
              "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
-             "voaacenc bitrate=64000 ! audio/mpeg, mpegversion=4, stream-format=raw ! "
+             "voaacenc bitrate=64000 ! audio/mpeg, mpegversion=4, stream-format=raw ! aacparse ! "
+             "rtpmp4apay ! application/x-rtp, clock-rate=44100, payload=96 ! "
              "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
+        self.audio_pipe = 'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=0 ! application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100'
 
         self.snd.get_bus().connect("message", self.snd_message)
         self.snd.get_bus().add_signal_watch()
 
         self.cams = []
 
-    def add_camera(self, name, type):
-        audio_pipe = (
-            'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
-            'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100')
+        sndpipe = self.audio_pipe + ' ! queue ! rtpmp4apay name=pay0'
 
-        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : audio_pipe, 'video_source' : type})
+        sound_stream = GstRtspServer.RTSPMediaFactory()
+        sound_stream.set_shared(True)
+        sound_stream.set_latency(100)
+        sound_stream.set_launch(sndpipe)
+        self.rtsp_server.get_mount_points().add_factory('/snd.m4a', sound_stream)
+
+    def add_camera(self, name, type):
+        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'video_source' : type})
         self.cams.append(cam)
 
     def snd_message(self, obj, event):

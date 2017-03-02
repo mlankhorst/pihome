@@ -13,16 +13,18 @@ def _unlink(what):
         return
 
 def initialize_rtsp(name, rtsp, vidsrc, sndsrc):
-    vidpipe = vidsrc + ' ! rtph264pay name=pay0'
-    sndpipe = sndsrc + ' ! aacparse ! queue ! rtpmp4apay name=pay1'
+    vidpipe = vidsrc + ', framerate=30/1 ! rtph264pay name=pay0'
+    sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
 
     full_stream = GstRtspServer.RTSPMediaFactory()
-    full_stream.set_shared(True)
+    #full_stream.set_shared(True)
+    full_stream.set_latency(100)
     full_stream.set_launch(vidpipe + ' ' + sndpipe)
     rtsp.get_mount_points().add_factory('/%s' % name, full_stream)
 
     vidonly_stream = GstRtspServer.RTSPMediaFactory()
-    vidonly_stream.set_shared(True)
+    #vidonly_stream.set_shared(True)
+    vidonly_stream.set_latency(100)
     vidonly_stream.set_launch(vidpipe)
 
     rtsp.get_mount_points().add_factory('/%s.m4v' % name, vidonly_stream)
@@ -39,14 +41,15 @@ def initialize_cam(name, settings):
     else:
         vidcaps += ', alignment=au, profile=constrained-baseline'
 
-    vidshmsrc = 'shmsrc name=camsrc is-live=1 do-timestamp=1 socket-path=%s ! %s' % (vidsocket, vidcaps)
+    vidshmsrc = 'shmsrc name=camsrc is-live=1 do-timestamp=0 socket-path=%s ! application/x-rtp ! rtph264depay ! %s' % (vidsocket, vidcaps)
     sndshmsrc = settings['audio_pipe']
 
     if settings['video_source'] == 'rpicamsrc':
         shmsink = Gst.parse_launch((
             'rpicamsrc do-timestamp=1 rotation=180 preview=0 inline-headers=1'
             ' bitrate=0 quantisation-parameter=25 name=rpicamsrc ! '
-            '%s, framerate=0/1 ! h264parse ! '
+            '%s, framerate=0/1 ! h264parse config-interval=1 ! '
+            'rtph264pay max-ptime=10000000 mtu=4194304 ! '
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
             % (vidcaps, vidsocket)))
     elif settings['video_source'] == 'uvch264src':
@@ -57,12 +60,13 @@ def initialize_cam(name, settings):
             'uvch264src.vfsrc ! image/jpeg,framerate=30/1 ! '
             'fakesink sync=0 qos=0 async=0 '
             'uvch264src.vidsrc ! %s, framerate=30/1 ! h264parse config-interval=1 ! '
+            'rtph264pay max-ptime=10000000 mtu=4194304 ! '
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
             % (vidcaps, vidsocket)))
 
     vidsave = Gst.parse_launch((
         '%s ! h264parse config-interval=-1 ! mux.video '
-        '%s ! aacparse ! queue ! mux.audio_0 '
+        '%s ! queue ! mux.audio_0 '
         ''
         'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
         % (vidshmsrc, sndshmsrc)))
@@ -70,7 +74,7 @@ def initialize_cam(name, settings):
     # stream has do-timestamp=1 now, sadly.. hope nothing breaks!
     vidstream = Gst.parse_launch((
         '%s ! h264parse ! queue ! mux.video '
-        '%s ! aacparse ! queue ! mux.audio '
+        '%s ! queue ! mux.audio '
         'flvmux name=mux streamable=true ! '
         'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
         % (vidshmsrc, sndshmsrc)))
