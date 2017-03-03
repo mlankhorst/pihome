@@ -4,7 +4,10 @@ import sys, gi, os, socket, time, subprocess
 
 gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
-from gi.repository import GObject, Gst, GstRtspServer, GLib, GObject
+gi.require_version('GstRtspServer', '1.0')
+gi.require_version('GstVideo', '1.0')
+
+from gi.repository import GObject, Gst, GstRtspServer, GstVideo, GLib, GObject
 
 def _unlink(what):
     try:
@@ -12,40 +15,29 @@ def _unlink(what):
     except FileNotFoundError:
         return
 
-def initialize_rtsp(name, rtsp, vidsrc, sndsrc):
-    vidpipe = vidsrc + ', framerate=30/1 ! h264parse config-interval=1 ! rtph264pay name=pay0'
-    sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
+class Camera:
+    def __init__(self, name, settings):
+        self.name = name
 
-    full_stream = GstRtspServer.RTSPMediaFactory()
-    full_stream.set_shared(True)
-    full_stream.set_latency(100)
-    full_stream.set_launch(vidpipe + ' ' + sndpipe)
-    rtsp.get_mount_points().add_factory('/%s' % name, full_stream)
+        vidsocket = '/tmp/%sv' % name
+        _unlink(vidsocket)
 
-    vidonly_stream = GstRtspServer.RTSPMediaFactory()
-    vidonly_stream.set_shared(True)
-    vidonly_stream.set_latency(100)
-    vidonly_stream.set_launch(vidpipe)
+        if settings['video_source'] == 'rpicamsrc':
+            self.cam = self.rpicamsrc(vidsocket)
+        elif settings['video_source'] == 'uvch264src':
+            self.cam = self.uvch264src(vidsocket)
 
-    rtsp.get_mount_points().add_factory('/%s.m4v' % name, vidonly_stream)
+        vidshmsrc = ('shmsrc name=camsrc is-live=0 do-timestamp=1 socket-path=%s ! '
+                     'application/x-rtp ! rtph264depay ! '
+                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=baseline'
+                     % vidsocket)
+        sndshmsrc = settings['audio_pipe']
 
-def initialize_cam(name, settings):
-    vidsocket = '/tmp/%sv' % name
+        self.initialize_streams(vidshmsrc, sndshmsrc)
+        self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
-    _unlink(vidsocket)
-
-    if settings['video_source'] == 'rpicamsrc':
-        shmsink = Gst.parse_launch((
-            'rpicamsrc do-timestamp=1 rotation=180 preview=0'
-            ' bitrate=0 quantisation-parameter=25 name=rpicamsrc ! '
-            'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=baseline, framerate=0/1 ! '
-            'h264parse config-interval=1 ! '
-            'video/x-h264,stream-format=byte-stream,alignment=au ! '
-            'rtph264pay mtu=4194304 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
-            % vidsocket))
-    elif settings['video_source'] == 'uvch264src':
-        shmsink = Gst.parse_launch((
+    def uvch264src(self, vidsocket):
+        return Gst.parse_launch((
             'uvch264src do-timestamp=1 auto-start=1 mode=2 rate-control=vbr'
             ' iframe-period=500 post-previews=0 initial-bitrate=2000000'
             ' peak-bitrate=4500000 average-bitrate=3000000 name=uvch264src '
@@ -58,33 +50,50 @@ def initialize_cam(name, settings):
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
             % vidsocket))
 
-    vidcaps = 'video/x-h264, stream-format=byte-stream, alignment=au, profile=baseline'
+    def rpicamsrc(self, vidsocket):
+        return Gst.parse_launch((
+            'rpicamsrc do-timestamp=1 rotation=180 preview=0 bitrate=0 '
+            ' quantisation-parameter=25 name=rpicamsrc ! '
+            'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=baseline, framerate=0/1 ! '
+            'h264parse config-interval=1 ! '
+            'video/x-h264,stream-format=byte-stream,alignment=au ! '
+            'rtph264pay mtu=4194304 ! '
+            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
+            % vidsocket))
 
-    vidshmsrc = 'shmsrc name=camsrc is-live=0 do-timestamp=1 socket-path=%s ! application/x-rtp ! rtph264depay ! %s' % (vidsocket, vidcaps)
-    sndshmsrc = settings['audio_pipe']
+    def initialize_streams(self, vidsrc, sndsrc):
+        self.save = Gst.parse_launch((
+            '%s ! h264parse config-interval=-1 ! mux.video '
+            '%s ! queue ! mux.audio_0 '
+            ''
+            'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
+            % (vidsrc, sndsrc)))
 
-    vidsave = Gst.parse_launch((
-        '%s ! h264parse config-interval=-1 ! mux.video '
-        '%s ! queue ! mux.audio_0 '
-        ''
-        'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
-        % (vidshmsrc, sndshmsrc)))
+        # stream has do-timestamp=1 now, sadly.. hope nothing breaks!
+        self.stream = Gst.parse_launch((
+            '%s ! h264parse ! queue ! mux.video '
+            '%s ! queue ! mux.audio '
+            'flvmux name=mux streamable=true ! '
+            'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
+            % (vidsrc, sndsrc)))
 
-    # stream has do-timestamp=1 now, sadly.. hope nothing breaks!
-    vidstream = Gst.parse_launch((
-        '%s ! h264parse ! queue ! mux.video '
-        '%s ! queue ! mux.audio '
-        'flvmux name=mux streamable=true ! '
-        'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
-        % (vidshmsrc, sndshmsrc)))
+    def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
+        vidpipe = vidsrc + ', framerate=30/1 ! h264parse config-interval=1 ! rtph264pay name=pay0'
+        sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
 
-    initialize_rtsp(name, settings['rtsp'], vidshmsrc, sndshmsrc)
-    return shmsink, vidsave, vidstream
+        full_stream = GstRtspServer.RTSPMediaFactory()
+        #full_stream.set_shared(True)
+        full_stream.set_latency(100)
+        full_stream.set_launch(vidpipe + ' ' + sndpipe)
+        rtsp.get_mount_points().add_factory('/%s' % self.name, full_stream)
 
-class Camera:
-    def __init__(self, name, settings):
-        self.name = name
-        self.cam, self.save, self.stream = initialize_cam(name, settings)
+        vidonly_stream = GstRtspServer.RTSPMediaFactory()
+        #vidonly_stream.set_shared(True)
+        vidonly_stream.set_latency(100)
+        vidonly_stream.set_launch(vidpipe)
+
+        rtsp.get_mount_points().add_factory('/%s.m4v' % self.name, vidonly_stream)
+
 
     def cam_message(self, obj, event):
         if event.src == self.cam:
@@ -104,7 +113,7 @@ class Camera:
             elif event.type == Gst.MessageType.EOS:
                 self.shutdown()
             else:
-                print('Streaming event: ', event.type)
+                print('Camera event: ', event.type)
         return
 
     def save_message(self, obj, event):
