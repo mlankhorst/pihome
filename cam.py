@@ -18,6 +18,8 @@ def _unlink(what):
 class Camera:
     def __init__(self, name, settings):
         self.name = name
+        self.timer = 0
+        self.key_count = 0
 
         vidsocket = '/tmp/%sv' % name
         _unlink(vidsocket)
@@ -27,7 +29,7 @@ class Camera:
         elif settings['video_source'] == 'uvch264src':
             self.cam = self.uvch264src(vidsocket)
 
-        vidshmsrc = ('shmsrc name=camsrc is-live=0 do-timestamp=1 socket-path=%s ! '
+        vidshmsrc = ('shmsrc name=camsrc is-live=1 do-timestamp=1 socket-path=%s ! '
                      'application/x-rtp ! rtph264depay ! '
                      'video/x-h264, stream-format=byte-stream, alignment=au, profile=baseline'
                      % vidsocket)
@@ -39,13 +41,13 @@ class Camera:
     def uvch264src(self, vidsocket):
         return Gst.parse_launch((
             'uvch264src do-timestamp=1 auto-start=1 mode=2 rate-control=vbr'
-            ' iframe-period=500 post-previews=0 initial-bitrate=2000000'
+            ' iframe-period=500 post-previews=0 initial-bitrate=2000000 io-mode=userptr'
             ' peak-bitrate=4500000 average-bitrate=3000000 name=uvch264src '
             'uvch264src.vfsrc ! image/jpeg,framerate=30/1 ! '
             'fakesink sync=0 qos=0 async=0 '
             'uvch264src.vidsrc ! '
             'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=constrained-baseline, framerate=30/1 ! '
-            'h264parse config-interval=1 ! '
+            'h264parse config-interval=-1 ! '
             'rtph264pay mtu=4194304 ! '
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
             % vidsocket))
@@ -53,9 +55,9 @@ class Camera:
     def rpicamsrc(self, vidsocket):
         return Gst.parse_launch((
             'rpicamsrc do-timestamp=1 rotation=180 preview=0 bitrate=0 '
-            ' quantisation-parameter=25 name=rpicamsrc ! '
+            ' quantisation-parameter=20 name=rpicamsrc ! '
             'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=baseline, framerate=0/1 ! '
-            'h264parse config-interval=1 ! '
+            'h264parse config-interval=-1 ! '
             'video/x-h264,stream-format=byte-stream,alignment=au ! '
             'rtph264pay mtu=4194304 ! '
             'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
@@ -78,22 +80,31 @@ class Camera:
             % (vidsrc, sndsrc)))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
-        vidpipe = vidsrc + ', framerate=30/1 ! h264parse config-interval=1 ! rtph264pay name=pay0'
+        vidpipe = vidsrc + ', framerate=30/1 ! h264parse ! queue ! rtph264pay name=pay0'
         sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
 
         full_stream = GstRtspServer.RTSPMediaFactory()
         #full_stream.set_shared(True)
         full_stream.set_latency(100)
         full_stream.set_launch(vidpipe + ' ' + sndpipe)
+        full_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s' % self.name, full_stream)
 
         vidonly_stream = GstRtspServer.RTSPMediaFactory()
         #vidonly_stream.set_shared(True)
         vidonly_stream.set_latency(100)
         vidonly_stream.set_launch(vidpipe)
-
+        vidonly_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s.m4v' % self.name, vidonly_stream)
 
+    def media_configure(self, mediafactory, media):
+        print("Request for media configure\n")
+
+        bin = media.get_element()
+        camsrc = bin.get_by_name('camsrc')
+
+        print('Camsrc: ', camsrc)
+        print('Bus: ', camsrc.get_bus())
 
     def cam_message(self, obj, event):
         if event.src == self.cam:
@@ -101,6 +112,10 @@ class Camera:
                event.type == Gst.MessageType.ASYNC_DONE:
                 if event.type == Gst.MessageType.STATE_CHANGED:
                     prev, new, pending = event.parse_state_changed()
+
+                    if prev == Gst.State.PLAYING and self.timer > 0:
+                        GLib.source_remove(self.timer)
+                        self.timer = 0
                 else:
                     new = event.src.get_state(0)[0]
                     pending = event.src.get_state(0)[1]
@@ -110,11 +125,26 @@ class Camera:
                     if new == Gst.State.NULL:
                         shmsink = self.cam.get_by_name('shmsink')
                         _unlink(shmsink.get_property('socket-path'))
+
+                    if new == Gst.State.PLAYING and self.timer <= 0:
+                        self.timer = GLib.timeout_add_seconds(3, self.send_keyframe)
             elif event.type == Gst.MessageType.EOS:
                 self.shutdown()
             else:
                 print('Camera event: ', event.type)
         return
+
+    def send_keyframe(self):
+        ev = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, self.key_count)
+        self.key_count += 1
+
+        sink = self.cam.get_by_name('rpicamsrc')
+        if not sink:
+            sink = self.cam.get_by_name('uvch264src')
+
+        sink.send_event(ev)
+
+        return True
 
     def save_message(self, obj, event):
         if event.src == self.save:
@@ -122,6 +152,8 @@ class Camera:
                 prev, new, pending = event.parse_state_changed()
                 if pending == Gst.State.VOID_PENDING:
                     print("New recording state: %s " % new)
+                elif pending == Gst.State.PLAYING and new == Gst.State.READY:
+                    self.send_keyframe()
             elif event.type == Gst.MessageType.EOS:
                 print('Received end of stream, shutting down recording.')
                 self.save.set_state(Gst.State.NULL)
@@ -134,6 +166,8 @@ class Camera:
                 prev, new, pending = event.parse_state_changed()
                 if pending == Gst.State.VOID_PENDING:
                     print("New streaming state: %s " % new)
+                elif pending == Gst.State.PLAYING and new == Gst.State.READY:
+                    self.send_keyframe()
             else:
                 print('Streaming event: ', event.type)
         else:

@@ -42,7 +42,7 @@ class Controller:
              "rtpmp4apay ! application/x-rtp, clock-rate=44100, payload=96 ! "
              "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
-             'shmsrc socket-path=/tmp/snd.m4a is-live=0 do-timestamp=1 ! '
+             'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
              'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
              'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
              'aacparse')
