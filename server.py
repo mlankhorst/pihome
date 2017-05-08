@@ -64,6 +64,8 @@ class Controller:
         cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'video_source' : type})
         self.cams.append(cam)
 
+        return cam
+
     def snd_message(self, obj, event):
         if event.src == self.snd:
             if event.type == Gst.MessageType.STATE_CHANGED:
