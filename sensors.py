@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import smbus, gi, server, time
+from contextlib import suppress
 
 gi.require_version('GLib', '2.0')
 from gi.repository import GObject, GLib
@@ -14,7 +15,7 @@ class sht3x:
 		bus.write_i2c_block_data(addr, 0x30, [0x41])
 
 	def read_temp(self, celsius=True):
-		bus.write_i2c_block_data(self.addr, 0x24, [0x00])
+		self.bus.write_i2c_block_data(self.addr, 0x24, [0x00])
 
 		time.sleep(.15)
 
@@ -56,8 +57,8 @@ def update_text(cam, light, temp):
 
 		txt = 't = %.1f - LV = %.0f%% - Lux %i' % (t, rh, l)
 		mode = '1'
-	except:
-		txt = None
+	except OSError:
+		txt = ''
 		mode = '0'
 
 	cam.setprop('annotation-text', txt)
@@ -71,14 +72,15 @@ if __name__ == '__main__':
 	main.add_camera('cam1', 'uvch264src')
 	cam3 = main.add_camera('cam3', 'rpicamsrc')
 
-	bus = smbus.SMBus(1)
+	with suppress(OSError):
+		bus = smbus.SMBus(1)
 
-        # Probe for BH1750-FVI
-	light = bh1750fvi(bus, addr=0x23)
+		# Probe for BH1750-FVI
+		light = bh1750fvi(bus, addr=0x23)
 
-	# Probe for sht3x
-	temp = sht3x(bus, addr=0x44)
+		# Probe for sht3x
+		temp = sht3x(bus, addr=0x44)
 
-	GLib.timeout_add_seconds(1, update_text, cam3, light, temp)
+		GLib.timeout_add_seconds(1, update_text, cam3, light, temp)
 
 	main.run()
