@@ -160,7 +160,7 @@ class Controller:
 if __name__ == '__main__':
     main = Controller()
 
-    if socket.gethostname() == 'raspberry':
+    if socket.gethostname() == 'raspberry' or socket.gethostname() == 'cam4':
         main.add_camera('cam4', 'rpicamsrc')
     elif socket.gethostname() == 'cam3':
         main.add_camera('cam1', 'uvch264src')
