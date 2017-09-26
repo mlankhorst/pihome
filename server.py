@@ -160,12 +160,14 @@ class Controller:
 if __name__ == '__main__':
     main = Controller()
 
-    if socket.gethostname() == 'raspberry' or socket.gethostname() == 'cam4':
-        main.add_camera('cam4', 'rpicamsrc')
+    if socket.gethostname() == 'raspberry':
+	main.add_camera('cam', 'rpicamsrc')
+    elif socket.gethostname() == 'cam2':
+        main.add_camera('cam2', 'rpicamsrc')
     elif socket.gethostname() == 'cam3':
         main.add_camera('cam1', 'uvch264src')
         main.add_camera('cam3', 'rpicamsrc')
     elif socket.gethostname() == 'tegra-ubuntu':
-        main.add_camera('cam2', 'uvch264src')
+        main.add_camera('cam4', 'uvch264src')
 
     main.run()
