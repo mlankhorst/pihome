@@ -54,8 +54,7 @@ class Camera:
 
     def rpicamsrc(self, vidsocket):
         return Gst.parse_launch((
-            'rpicamsrc do-timestamp=1 rotation=180 preview=0 bitrate=0 '
-            ' quantisation-parameter=20 name=rpicamsrc ! '
+            'rpicamsrc do-timestamp=1 rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=rpicamsrc ! '
             'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=baseline, framerate=0/1 ! '
             'h264parse config-interval=-1 ! '
             'video/x-h264,stream-format=byte-stream,alignment=au ! '
@@ -252,7 +251,6 @@ class Camera:
             cam.set_property('iso', 1600)
             cam.set_property('drc', 3)
             cam.set_property('metering-mode', 'spot')
-            cam.set_property('sensor-mode', 5)
             cam.set_property('quantisation-parameter', 15)
             cam.set_property('bitrate', 0)
             cam.set_property('awb-mode', 0)
@@ -280,7 +278,6 @@ class Camera:
             cam.set_property('iso', 0)
             cam.set_property('drc', 0)
             cam.set_property('metering-mode', 1)
-            cam.set_property('sensor-mode', 5)
             cam.set_property('quantisation-parameter', 15)
             cam.set_property('bitrate', 0)
             cam.set_property('awb-mode', 'tungsten')
@@ -306,7 +303,6 @@ class Camera:
             cam.set_property('iso', 1600)
             cam.set_property('drc', 3)
             cam.set_property('metering-mode', 'spot')
-            cam.set_property('sensor-mode', 5)
             cam.set_property('quantisation-parameter', 15)
             cam.set_property('bitrate', 0)
             cam.set_property('awb-mode', 0)
