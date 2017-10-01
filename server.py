@@ -161,7 +161,7 @@ if __name__ == '__main__':
     main = Controller()
 
     if socket.gethostname() == 'raspberry':
-	main.add_camera('cam', 'rpicamsrc')
+        main.add_camera('cam', 'rpicamsrc')
     elif socket.gethostname() == 'cam2':
         main.add_camera('cam2', 'rpicamsrc')
     elif socket.gethostname() == 'cam3':
