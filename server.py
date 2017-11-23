@@ -133,7 +133,7 @@ class Controller:
             socket.send(b'Invalid camera ' + name.encode() + b'\n')
         elif str:
             for cam in self.cams:
-                self.cams[0].run_command(socket, str)
+                cam.run_command(socket, str)
         else:
             socket.send(b'Usage: (:camera) <command>\n')
         return
