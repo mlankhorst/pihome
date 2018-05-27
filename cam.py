@@ -63,24 +63,39 @@ class Camera:
             % vidsocket))
 
     def initialize_streams(self, vidsrc, sndsrc):
-        self.save = Gst.parse_launch((
-            '%s ! h264parse config-interval=-1 ! mux.video '
-            '%s ! queue ! mux.audio_0 '
-            ''
-            'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
-            % (vidsrc, sndsrc)))
+        if sndsrc:
+            self.save = Gst.parse_launch((
+                '%s ! h264parse config-interval=-1 ! mux.video '
+                '%s ! queue ! mux.audio_0 '
+                ''
+                'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
+                % (vidsrc, sndsrc)))
+        else:
+            self.save = Gst.parse_launch((
+                '%s ! h264parse config-interval=-1 ! mux.video '
+                'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 ' % vidsrc))
 
         # stream has do-timestamp=1 now, sadly.. hope nothing breaks!
-        self.stream = Gst.parse_launch((
-            '%s ! h264parse ! queue ! mux.video '
-            '%s ! queue ! mux.audio '
-            'flvmux name=mux streamable=true ! '
-            'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
-            % (vidsrc, sndsrc)))
+        if sndsrc:
+            self.stream = Gst.parse_launch((
+                '%s ! h264parse ! queue ! mux.video '
+                '%s ! queue ! mux.audio '
+                'flvmux name=mux streamable=true ! '
+                'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
+                % (vidsrc, sndsrc)))
+        else:
+            self.stream = Gst.parse_launch((
+                '%s ! h264parse ! queue ! mux.video '
+                'flvmux name=mux streamable=true ! '
+                'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
+                % vidsrc))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
         vidpipe = vidsrc + ', framerate=30/1 ! h264parse ! queue ! rtph264pay name=pay0'
-        sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
+        if sndsrc:
+            sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
+        else
+            sndpipe = ''
 
         full_stream = GstRtspServer.RTSPMediaFactory()
         #full_stream.set_shared(True)

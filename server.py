@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, gi, os, socket, time, subprocess
+import sys, gi, os, socket, time, subprocess, psutil
 
 from cam import Camera
 
@@ -46,9 +46,6 @@ class Controller:
              'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
              'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
              'aacparse')
-
-        self.snd.get_bus().connect("message", self.snd_message)
-        self.snd.get_bus().add_signal_watch()
 
         self.cams = []
 
@@ -154,8 +151,30 @@ class Controller:
         self.conns = {}
         self.savemsgs = {}
 
+    def use_mp3(self):
+        self.snd = Gst.parse_launch((
+            "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
+            "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
+            "lamemp3enc ! audio/mpeg, rate=44100, channels=2 ! mpegaudioparse ! "
+            "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
+        self.audio_pipe = (
+            'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
+            'audio/mpeg, mpegversion=1, mpegaudioversion=3, rate=44100, channels=2 ! '
+            'mpegaudioparse')
+
+    def no_sound(self):
+        self.snd = None
+        self.audio_pipe = None
+
     def run(self):
-        self.snd.set_state(Gst.State.PLAYING)
+        if self.snd:
+            self.snd.get_bus().connect("message", self.snd_message)
+            self.snd.get_bus().add_signal_watch()
+            self.snd.set_state(Gst.State.PLAYING)
+        else:
+            for cam in self.cams:
+                cam.run()
+
         self.mainloop.run()
 
 if __name__ == '__main__':
@@ -170,5 +189,20 @@ if __name__ == '__main__':
         main.add_camera('cam3', 'rpicamsrc')
     elif socket.gethostname() == 'tegra-ubuntu':
         main.add_camera('cam4', 'uvch264src')
+    elif socket.gethostname() == 'cam5':
+        main.add_camera('cam5', 'rpicamsrc')
+
+    # On a single core cpu use mp3 encoding
+    if psutil.cpu_count() is 1:
+        main.use_mp3()
+
+    # Disable sound entirely, if not available.
+    sound = False
+    for x in os.listdir('/sys/class/sound/'):
+        if x.startswith('pcm') and x.endswith('c'))
+            sound = True
+
+    if not sound:
+        main.no_sound()
 
     main.run()
