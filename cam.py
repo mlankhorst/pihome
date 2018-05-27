@@ -94,7 +94,7 @@ class Camera:
         vidpipe = vidsrc + ', framerate=30/1 ! h264parse ! queue ! rtph264pay name=pay0'
         if sndsrc:
             sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
-        else
+        else:
             sndpipe = ''
 
         full_stream = GstRtspServer.RTSPMediaFactory()
@@ -192,6 +192,9 @@ class Camera:
             if event.type == Gst.MessageType.ERROR:
                 gthing, debug = event.parse_error()
                 print('Streaming error: ', gthing, debug)
+            elif event.type == Gst.MessageType.WARNING:
+                gthing, debug = event.parse_warning()
+                print('Streaming event warning: ', gthing, debug)
             else:
                 print('Streaming element event: ', event.type)
 

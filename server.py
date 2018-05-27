@@ -15,7 +15,7 @@ def _unlink(what):
         return
 
 class Controller:
-    def __init__(self):
+    def __init__(self, sound='aac'):
         Gst.init(sys.argv)
         self.mainloop = GLib.MainLoop()
         self.socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -35,27 +35,14 @@ class Controller:
 
         _unlink("/tmp/snd.m4a")
 
-        self.snd = Gst.parse_launch((
-             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
-             "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
-             "voaacenc bitrate=64000 ! audio/mpeg, mpegversion=4, stream-format=raw ! aacparse ! "
-             "rtpmp4apay ! application/x-rtp, clock-rate=44100, payload=96 ! "
-             "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
-        self.audio_pipe = (
-             'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
-             'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
-             'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
-             'aacparse')
+        if sound is 'aac':
+            self.use_aac()
+        elif sound is 'mp3':
+            self.use_mp3()
+        else:
+            self.no_sound()
 
         self.cams = []
-
-        sndpipe = self.audio_pipe + ' ! queue ! rtpmp4apay name=pay0'
-
-        sound_stream = GstRtspServer.RTSPMediaFactory()
-        sound_stream.set_shared(True)
-        sound_stream.set_latency(100)
-        sound_stream.set_launch(sndpipe)
-        self.rtsp_server.get_mount_points().add_factory('/snd.m4a', sound_stream)
 
     def add_camera(self, name, type):
         cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'video_source' : type})
@@ -151,6 +138,28 @@ class Controller:
         self.conns = {}
         self.savemsgs = {}
 
+    def use_aac(self):
+        self.snd = Gst.parse_launch((
+            "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
+            "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
+            "voaacenc bitrate=64000 ! audio/mpeg, mpegversion=4, stream-format=raw ! aacparse ! "
+            "rtpmp4apay ! application/x-rtp, clock-rate=44100, payload=96 ! "
+            "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
+        self.audio_pipe = (
+            'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
+            'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
+            'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
+            'aacparse')
+
+        sndpipe = self.audio_pipe + ' ! queue ! rtpmp4apay name=pay0'
+
+        sound_stream = GstRtspServer.RTSPMediaFactory()
+        sound_stream.set_shared(True)
+        sound_stream.set_latency(100)
+        sound_stream.set_launch(sndpipe)
+        self.rtsp_server.get_mount_points().add_factory('/snd.m4a', sound_stream)
+        self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
+
     def use_mp3(self):
         self.snd = Gst.parse_launch((
             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
@@ -159,8 +168,17 @@ class Controller:
             "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
             'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
-            'audio/mpeg, mpegversion=1, mpegaudioversion=3, rate=44100, channels=2 ! '
+            'audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! '
             'mpegaudioparse')
+
+        sndpipe = self.audio_pipe + ' ! queue ! rtpmpapay name=pay0'
+
+        sound_stream = GstRtspServer.RTSPMediaFactory()
+        sound_stream.set_shared(True)
+        sound_stream.set_latency(100)
+        sound_stream.set_launch(sndpipe)
+        self.rtsp_server.get_mount_points().add_factory('/snd.mp3', sound_stream)
+        self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
 
     def no_sound(self):
         self.snd = None
@@ -178,8 +196,12 @@ class Controller:
         self.mainloop.run()
 
 if __name__ == '__main__':
-    main = Controller()
+    sound = None
+    for x in os.listdir('/sys/class/sound/'):
+        if x.startswith('pcm') and x.endswith('c'):
+            sound = 'aac' if psutil.cpu_count() > 1 else 'mp3'
 
+    main = Controller(sound = sound)
     if socket.gethostname() == 'raspberry':
         main.add_camera('cam', 'rpicamsrc')
     elif socket.gethostname() == 'cam2':
@@ -199,7 +221,7 @@ if __name__ == '__main__':
     # Disable sound entirely, if not available.
     sound = False
     for x in os.listdir('/sys/class/sound/'):
-        if x.startswith('pcm') and x.endswith('c'))
+        if x.startswith('pcm') and x.endswith('c'):
             sound = True
 
     if not sound:
