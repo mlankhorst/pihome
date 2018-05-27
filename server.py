@@ -34,6 +34,7 @@ class Controller:
                           self.server_msg)
 
         _unlink("/tmp/snd.m4a")
+        _unlink("/tmp/snd.mp3")
 
         if sound is 'aac':
             self.use_aac()
@@ -61,6 +62,7 @@ class Controller:
                             cam.run()
                     elif new == Gst.State.NULL:
                         _unlink("/tmp/snd.m4a")
+                        _unlink("/tmp/snd.mp3")
 
     def server_msg(self, source, cond):
         if (cond & GLib.IO_IN):
@@ -165,9 +167,9 @@ class Controller:
             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
             "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
             "lamemp3enc ! audio/mpeg, rate=44100, channels=2 ! mpegaudioparse ! "
-            "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
+            "shmsink wait-for-connection=0 socket-path=/tmp/snd.mp3 shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
-            'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
+            'shmsrc socket-path=/tmp/snd.mp3 is-live=1 do-timestamp=1 ! '
             'audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! '
             'mpegaudioparse')
 
@@ -213,18 +215,5 @@ if __name__ == '__main__':
         main.add_camera('cam4', 'uvch264src')
     elif socket.gethostname() == 'cam5':
         main.add_camera('cam5', 'rpicamsrc')
-
-    # On a single core cpu use mp3 encoding
-    if psutil.cpu_count() is 1:
-        main.use_mp3()
-
-    # Disable sound entirely, if not available.
-    sound = False
-    for x in os.listdir('/sys/class/sound/'):
-        if x.startswith('pcm') and x.endswith('c'):
-            sound = True
-
-    if not sound:
-        main.no_sound()
 
     main.run()
