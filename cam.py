@@ -49,7 +49,7 @@ class Camera:
             'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=constrained-baseline, framerate=30/1 ! '
             'h264parse config-interval=-1 ! '
             'rtph264pay mtu=4194304 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
+            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=33554432'
             % vidsocket))
 
     def rpicamsrc(self, vidsocket):
@@ -59,7 +59,7 @@ class Camera:
             'h264parse config-interval=-1 ! '
             'video/x-h264,stream-format=byte-stream,alignment=au ! '
             'rtph264pay mtu=4194304 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0'
+            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=33554432'
             % vidsocket))
 
     def initialize_streams(self, vidsrc, sndsrc):
