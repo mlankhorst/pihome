@@ -4,6 +4,9 @@ https://github.com/thaytan/gst-rpicamsrc
 
 Install the required packages:
 
-sudo apt-get install python3 python3-gi python3-gst-1.0 python3-psutil pulseaudio \
+sudo apt-get install python3 python3-gi python3-gst-1.0 python3-psutil \
+	python3-smbus python3-pip pulseaudio \
 	gstreamer1.0-plugins-{good,bad,ugly} gstreamer1.0-pulseaudio \
 	gir1.2-gst-plugins-base-1.0 gir1.2-gstreamer-1.0 gir1.2-gst-rtsp-server-1.0
+
+pip3 install wiringpi
