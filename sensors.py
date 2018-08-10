@@ -130,7 +130,7 @@ def update_text(cam, light, temp, monitor):
 	try:
 		[ t, rh ] = temp.read_temp()
 		l = light.read_light()
-		s = wiringpi.digitalRead(2)
+		s = wiringpi.digitalRead(13)
 
 		txt = 't = %.1f - LV = %.0f%% - Lux %i - Stroomklok: %s' % (t, rh, l, "aan" if s else "uit")
 		mode = '1'
