@@ -46,7 +46,7 @@ class Controller:
         self.cams = []
 
     def add_camera(self, name, type):
-        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'video_source' : type})
+        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'audiopay' : self.audiopay, 'video_source' : type})
         self.cams.append(cam)
 
         return cam
@@ -140,6 +140,14 @@ class Controller:
         self.conns = {}
         self.savemsgs = {}
 
+    def create_stream(self, ext, shared):
+        sound_stream = GstRtspServer.RTSPMediaFactory()
+        sound_stream.set_shared(shared)
+        sound_stream.set_latency(100)
+        sound_stream.set_launch(self.audio_pipe + ' ! queue ! ' + self.audiopay + 'name=pay0')
+        self.rtsp_server.get_mount_points().add_factory('/snd.' + ext, sound_stream)
+        self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
+
     def use_aac(self):
         self.snd = Gst.parse_launch((
             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
@@ -152,15 +160,8 @@ class Controller:
             'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
             'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
             'aacparse')
-
-        sndpipe = self.audio_pipe + ' ! queue ! rtpmp4apay name=pay0'
-
-        sound_stream = GstRtspServer.RTSPMediaFactory()
-        sound_stream.set_shared(True)
-        sound_stream.set_latency(100)
-        sound_stream.set_launch(sndpipe)
-        self.rtsp_server.get_mount_points().add_factory('/snd.m4a', sound_stream)
-        self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
+        self.audiopay = 'rtpmp4apay'
+        self.create_stream('m4a', False)
 
     def use_mp3(self):
         self.snd = Gst.parse_launch((
@@ -172,19 +173,13 @@ class Controller:
             'shmsrc socket-path=/tmp/snd.mp3 is-live=1 do-timestamp=1 ! '
             'audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! '
             'mpegaudioparse')
-
-        sndpipe = self.audio_pipe + ' ! queue ! rtpmpapay name=pay0'
-
-        sound_stream = GstRtspServer.RTSPMediaFactory()
-        sound_stream.set_shared(True)
-        sound_stream.set_latency(100)
-        sound_stream.set_launch(sndpipe)
-        self.rtsp_server.get_mount_points().add_factory('/snd.mp3', sound_stream)
-        self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
+        self.audiopay = 'rtpmpapay'
+        self.create_stream('mp3', True)
 
     def no_sound(self):
         self.snd = None
         self.audio_pipe = None
+        self.audiopay = None
 
     def run(self):
         if self.snd:

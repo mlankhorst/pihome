@@ -36,6 +36,8 @@ class Camera:
         sndshmsrc = settings['audio_pipe']
 
         self.initialize_streams(vidshmsrc, sndshmsrc)
+        if sndshmsrc:
+            sndshmsrc += ' ! queue ! ' + settings['audiopay']
         self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
     def uvch264src(self, vidsocket):
@@ -93,7 +95,7 @@ class Camera:
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
         vidpipe = vidsrc + ', framerate=30/1 ! h264parse ! queue ! rtph264pay name=pay0'
         if sndsrc:
-            sndpipe = sndsrc + ' ! queue ! rtpmp4apay name=pay1'
+            sndpipe = sndsrc + ' name=pay1'
         else:
             sndpipe = ''
 
