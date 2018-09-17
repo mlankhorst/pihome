@@ -144,7 +144,7 @@ class Controller:
         sound_stream = GstRtspServer.RTSPMediaFactory()
         sound_stream.set_shared(shared)
         sound_stream.set_latency(100)
-        sound_stream.set_launch(self.audio_pipe + ' ! queue ! ' + self.audiopay + 'name=pay0')
+        sound_stream.set_launch(self.audio_pipe + ' ! queue ! ' + self.audiopay + ' name=pay0')
         self.rtsp_server.get_mount_points().add_factory('/snd.' + ext, sound_stream)
         self.rtsp_server.get_mount_points().add_factory('/snd', sound_stream)
 
