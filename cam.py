@@ -25,75 +25,84 @@ class Camera:
         _unlink(vidsocket)
 
         if settings['video_source'] == 'rpicamsrc':
-            self.cam = self.rpicamsrc(vidsocket)
+            self.framerate = 0
+            cam = self.rpicamsrc()
         elif settings['video_source'] == 'uvch264src':
-            self.cam = self.uvch264src(vidsocket)
+            self.framerate = 30
+            cam = self.uvch264src()
+        elif settings['video_source'] == 'libcamerasrc':
+            self.framerate = 50
+            cam = self.libcamerasrc()
+
+        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
+            'video/x-h264, stream-format=byte-stream, alignment=au ! '
+            'rtph264pay mtu=4294967295 ! '
+            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=%d' %
+            (cam, vidsocket, 128 << 20)))
 
         vidshmsrc = ('shmsrc name=camsrc is-live=1 do-timestamp=1 socket-path=%s ! '
-                     'application/x-rtp ! rtph264depay ! '
-                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=baseline'
-                     % vidsocket)
+                     'application/x-rtp ! rtph264depay ! h264parse config-interval=-1 ! '
+                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, framerate=%d/1'
+                     % (vidsocket, self.framerate))
         sndshmsrc = settings['audio_pipe']
 
         self.initialize_streams(vidshmsrc, sndshmsrc)
         if sndshmsrc:
-            sndshmsrc += ' ! queue ! ' + settings['audiopay']
+            sndshmsrc += ' ! ' + settings['audiopay']
         self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
-    def uvch264src(self, vidsocket):
-        return Gst.parse_launch((
-            'uvch264src do-timestamp=1 auto-start=1 mode=2 rate-control=vbr'
-            ' iframe-period=500 post-previews=0 initial-bitrate=2000000 io-mode=userptr'
-            ' peak-bitrate=4500000 average-bitrate=3000000 name=uvch264src '
-            'uvch264src.vfsrc ! image/jpeg,framerate=30/1 ! '
-            'fakesink sync=0 qos=0 async=0 '
-            'uvch264src.vidsrc ! '
-            'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=constrained-baseline, framerate=30/1 ! '
-            'h264parse config-interval=-1 ! '
-            'rtph264pay mtu=4194304 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=33554432'
-            % vidsocket))
+    def uvch264src(self):
+        return ('uvch264src auto-start=1 mode=2 rate-control=vbr' \
+                ' iframe-period=500 post-previews=0 initial-bitrate=250000 ' \
+                ' peak-bitrate=250000 average-bitrate=100000 name=livesrc ' \
+                'livesrc.vfsrc ! image/jpeg,framerate=%d/1 ! ' \
+                'fakesink sync=0 qos=0 async=0 ' \
+                'livesrc.vidsrc ! ' \
+                'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=high, framerate=%d/1' % \
+               (self.framerate, self.framerate))
 
-    def rpicamsrc(self, vidsocket):
-        return Gst.parse_launch((
-            'rpicamsrc do-timestamp=1 rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=rpicamsrc ! '
-            'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=baseline, framerate=0/1 ! '
-            'h264parse config-interval=-1 ! '
-            'video/x-h264,stream-format=byte-stream,alignment=au ! '
-            'rtph264pay mtu=4194304 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=33554432'
-            % vidsocket))
+    def rpicamsrc(self):
+        return ('rpicamsrc rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=livesrc ! ' \
+                'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=high, framerate=%d/1' %
+                (self.framerate))
+
+    def libcamerasrc(self):
+        return ('libcamerasrc name=livesrc ! video/x-raw, width=1920, height=1080,' \
+                ' framerate=%d/1, colorimetry=(string)bt709, interlace-mode=progressive, format=NV12 ! ' \
+                'v4l2convert extra-controls=controls,horizontal_flip=1,vertical_flip=1 ! '\
+                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 !' \
+                'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, level=(string)4.2 ' % \
+                (self.framerate))
 
     def initialize_streams(self, vidsrc, sndsrc):
         if sndsrc:
             self.save = Gst.parse_launch((
-                '%s ! h264parse config-interval=-1 ! mux.video '
+                '%s ! queue ! h264parse config-interval=-1 ! mux.video '
                 '%s ! queue ! mux.audio_0 '
                 ''
-                'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 '
+                'splitmuxsink name=mux max-size-time=900000000000 '
                 % (vidsrc, sndsrc)))
         else:
             self.save = Gst.parse_launch((
-                '%s ! h264parse config-interval=-1 ! mux.video '
-                'splitmuxsink name=mux async=0 sync=0 qos=0 max-size-time=900000000000 ' % vidsrc))
+                '%s ! queue ! h264parse config-interval=-1 ! mux.video '
+                'splitmuxsink name=mux max-size-time=900000000000 ' % vidsrc))
 
-        # stream has do-timestamp=1 now, sadly.. hope nothing breaks!
         if sndsrc:
             self.stream = Gst.parse_launch((
-                '%s ! h264parse ! queue ! mux.video '
-                '%s ! queue ! mux.audio '
+                '%s ! h264parse ! mux.video '
+                '%s ! mux.audio '
                 'flvmux name=mux streamable=true ! '
                 'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
                 % (vidsrc, sndsrc)))
         else:
             self.stream = Gst.parse_launch((
-                '%s ! h264parse ! queue ! mux.video '
+                '%s ! h264parse ! mux.video '
                 'flvmux name=mux streamable=true ! '
                 'rtmpsink name=rtmpsink0 qos=0 sync=0 async=0'
                 % vidsrc))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
-        vidpipe = vidsrc + ', framerate=30/1 ! h264parse ! queue ! rtph264pay name=pay0'
+        vidpipe = vidsrc + ' ! rtph264pay name=pay0'
         if sndsrc:
             sndpipe = sndsrc + ' name=pay1'
         else:
@@ -158,10 +167,7 @@ class Camera:
         ev = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, self.key_count)
         self.key_count += 1
 
-        sink = self.cam.get_by_name('rpicamsrc')
-        if not sink:
-            sink = self.cam.get_by_name('uvch264src')
-
+        sink = self.cam.get_by_name('livesrc')
         sink.send_event(ev)
 
         return True
@@ -216,10 +222,13 @@ class Camera:
             self.save.send_event(Gst.Event.new_eos())
 
     def startstream(self, url, text):
-        cam = self.cam.get_by_name('rpicamsrc')
-        if cam and text:
-            cam.set_property('annotation-mode', 1)
-            cam.set_property('annotation-text', text)
+        try:
+            cam = self.cam.get_by_name('livesrc')
+            if text:
+                cam.set_property('annotation-mode', 1)
+                cam.set_property('annotation-text', text)
+        except TypeError:
+            pass
 
         rtmpsink = self.stream.get_by_name('rtmpsink0')
         rtmpsink.set_property('location', url)
@@ -227,9 +236,11 @@ class Camera:
         self.stream.set_state(Gst.State.PLAYING)
 
     def stopstream(self):
-        cam = self.cam.get_by_name('rpicamsrc')
-        if cam:
+        try:
+            cam = self.cam.get_by_name('livesrc')
             cam.set_property('annotation-mode', 0)
+        except TypeError:
+            pass
 
         self.stream.set_state(Gst.State.NULL)
 
@@ -252,8 +263,8 @@ class Camera:
         self.cam.set_state(Gst.State.PLAYING)
 
     def night_mode(self):
-        cam = self.cam.get_by_name('uvch264src')
-        if cam:
+        cam = self.cam.get_by_name('livesrc')
+        if cam.get_factory().get_name() != 'rpicamsrc':
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
@@ -262,8 +273,6 @@ class Camera:
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30,exposure_absolute=2047'])
         else:
-            cam = self.cam.get_by_name('rpicamsrc')
-
             cam.set_property('saturation', -100)
             cam.set_property('brightness', 60)
             cam.set_property('contrast', 20)
@@ -304,7 +313,7 @@ class Camera:
             cam.set_property('shutter-speed', 0) # Variable exposure
 
     def shimmer_mode(self):
-        cam = self.cam.get_by_name('uvch264src')
+        cam = self.cam.get_by_name('livesrc')
         if cam:
             dev = cam.get_property('device')
 

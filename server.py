@@ -36,9 +36,9 @@ class Controller:
         _unlink("/tmp/snd.m4a")
         _unlink("/tmp/snd.mp3")
 
-        if sound is 'aac':
+        if sound == 'aac':
             self.use_aac()
-        elif sound is 'mp3':
+        elif sound == 'mp3':
             self.use_mp3()
         else:
             self.no_sound()
@@ -150,15 +150,15 @@ class Controller:
 
     def use_aac(self):
         self.snd = Gst.parse_launch((
-            "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
-            "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
+            "alsasrc latency-time=32000 buffer-time=256000 do-timestamp=1 device=hw:CARD=C920 ! "
+            "audio/x-raw, format=S16LE, rate=32000, channels=2 ! "
             "voaacenc bitrate=64000 ! audio/mpeg, mpegversion=4, stream-format=raw ! aacparse ! "
-            "rtpmp4apay ! application/x-rtp, clock-rate=44100, payload=96 ! "
+            "rtpmp4apay ! application/x-rtp, clock-rate=32000, payload=96 ! "
             "shmsink wait-for-connection=0 socket-path=/tmp/snd.m4a shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
             'shmsrc socket-path=/tmp/snd.m4a is-live=1 do-timestamp=1 ! '
-            'application/x-rtp, clock-rate=44100, payload=96 ! rtpmp4adepay ! '
-            'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1210, channels=2, rate=44100 ! '
+            'application/x-rtp, clock-rate=32000, payload=96 ! rtpmp4adepay ! '
+            'audio/mpeg, mpegversion=4, stream-format=raw, codec_data=(buffer)1290, rate=32000 ! '
             'aacparse')
         self.audiopay = 'rtpmp4apay'
         self.create_stream('m4a', False)
@@ -167,11 +167,11 @@ class Controller:
         self.snd = Gst.parse_launch((
             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
             "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
-            "lamemp3enc ! audio/mpeg, rate=44100, channels=2 ! mpegaudioparse ! "
+            "lamemp3enc ! audio/mpeg, rate=44100, channels=1 ! mpegaudioparse ! "
             "shmsink wait-for-connection=0 socket-path=/tmp/snd.mp3 shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
             'shmsrc socket-path=/tmp/snd.mp3 is-live=1 do-timestamp=1 ! '
-            'audio/mpeg, mpegversion=1, layer=3, rate=44100, channels=2 ! '
+            'audio/mpeg, mpegversion=1, layer=3, rate=44100 ! '
             'mpegaudioparse')
         self.audiopay = 'rtpmpapay'
         self.create_stream('mp3', True)
@@ -203,10 +203,10 @@ if __name__ == '__main__':
         main.add_camera('cam', 'rpicamsrc')
     elif socket.gethostname() == 'cam2':
         main.add_camera('cam2', 'rpicamsrc')
-    elif socket.gethostname() == 'cam3':
-        main.add_camera('cam1', 'uvch264src')
-        main.add_camera('cam3', 'rpicamsrc')
-    elif socket.gethostname() == 'tegra-ubuntu':
+    elif socket.gethostname() == 'cam1':
+        main.add_camera('cam1', 'libcamerasrc')
+        main.add_camera('cam2', 'uvch264src')
+    elif socket.gethostname() == 'cam4':
         main.add_camera('cam4', 'uvch264src')
     elif socket.gethostname() == 'cam5':
         main.add_camera('cam5', 'rpicamsrc')
