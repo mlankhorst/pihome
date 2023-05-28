@@ -52,26 +52,32 @@ class Camera:
         self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
     def uvch264src(self):
-        return ('uvch264src auto-start=1 mode=2 rate-control=vbr' \
-                ' iframe-period=500 post-previews=0 initial-bitrate=250000 ' \
-                ' peak-bitrate=250000 average-bitrate=100000 name=livesrc ' \
-                'livesrc.vfsrc ! image/jpeg,framerate=%d/1 ! ' \
-                'fakesink sync=0 qos=0 async=0 ' \
-                'livesrc.vidsrc ! ' \
-                'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=high, framerate=%d/1' % \
+        return ('uvch264src auto-start=1 mode=2 rate-control=vbr'
+                ' iframe-period=500 post-previews=0 initial-bitrate=250000 '
+                ' peak-bitrate=250000 average-bitrate=100000 name=livesrc '
+                'livesrc.vfsrc ! image/jpeg,framerate=%d/1 ! '
+                'fakesink sync=0 qos=0 async=0 '
+                'livesrc.vidsrc ! '
+                'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=high, framerate=%d/1' %
                (self.framerate, self.framerate))
 
     def rpicamsrc(self):
-        return ('rpicamsrc rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=livesrc ! ' \
+        return ('rpicamsrc rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=livesrc ! '
                 'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=high, framerate=%d/1' %
                 (self.framerate))
 
     def libcamerasrc(self):
-        return ('libcamerasrc name=livesrc ! video/x-raw, width=1920, height=1080,' \
-                ' framerate=%d/1, colorimetry=(string)bt709, interlace-mode=progressive, format=NV12 ! ' \
-                'v4l2convert extra-controls=controls,horizontal_flip=1,vertical_flip=1 ! '\
-                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 !' \
-                'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, level=(string)4.2 ' % \
+        proc = subprocess.Popen(['/usr/bin/libcamera-vid', '--width', '1920', '--height', '1080',
+                                '--hflip', '--vflip', '--profile', 'high', '--level', '4.2', '--inline', '-t', '0', '-o-'],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.proc = proc
+        return ('fdsrc fd=%d' % (proc.stdout.fileno()))
+        # libcamera's gstreamer module does not support everything we need right now, so we use the workaround above.
+        return ('libcamerasrc name=livesrc ! video/x-raw, width=1920, height=1080,'
+                ' framerate=%d/1, colorimetry=(string)bt709, interlace-mode=progressive, format=NV12 ! '
+                'v4l2convert extra-controls=controls,horizontal_flip=1,vertical_flip=1 ! '
+                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 !'
+                'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, level=(string)4.2 ' %
                 (self.framerate))
 
     def initialize_streams(self, vidsrc, sndsrc):
@@ -129,12 +135,6 @@ class Camera:
     def media_configure(self, mediafactory, media):
         print("Request for media configure\n")
 
-        bin = media.get_element()
-        camsrc = bin.get_by_name('camsrc')
-
-        print('Camsrc: ', camsrc)
-        print('Bus: ', camsrc.get_bus())
-
     def cam_message(self, obj, event):
         if event.src == self.cam:
             if event.type == Gst.MessageType.STATE_CHANGED or \
@@ -168,9 +168,10 @@ class Camera:
         self.key_count += 1
 
         sink = self.cam.get_by_name('livesrc')
-        sink.send_event(ev)
+        if sink:
+            sink.send_event(ev)
 
-        return True
+        return sink is not None
 
     def save_message(self, obj, event):
         if event.src == self.save:

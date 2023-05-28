@@ -167,7 +167,7 @@ class Controller:
         self.snd = Gst.parse_launch((
             "pulsesrc latency-time=30000 buffer-time=180000 do-timestamp=1 ! "
             "audio/x-raw, format=S16LE, rate=44100, channels=2 ! "
-            "lamemp3enc ! audio/mpeg, rate=44100, channels=1 ! mpegaudioparse ! "
+            "lamemp3enc ! audio/mpeg ! mpegaudioparse ! "
             "shmsink wait-for-connection=0 socket-path=/tmp/snd.mp3 shm-size=4194304 sync=0 async=0 qos=0"))
         self.audio_pipe = (
             'shmsrc socket-path=/tmp/snd.mp3 is-live=1 do-timestamp=1 ! '
@@ -201,11 +201,11 @@ if __name__ == '__main__':
     main = Controller(sound = sound)
     if socket.gethostname() == 'raspberry':
         main.add_camera('cam', 'rpicamsrc')
-    elif socket.gethostname() == 'cam2':
-        main.add_camera('cam2', 'rpicamsrc')
     elif socket.gethostname() == 'cam1':
-        main.add_camera('cam1', 'libcamerasrc')
-        main.add_camera('cam2', 'uvch264src')
+        main.add_camera('cam2', 'libcamerasrc')
+    elif socket.gethostname() == 'cam0':
+        main.add_camera('cam0', 'libcamerasrc')
+        main.add_camera('cam1', 'uvch264src')
     elif socket.gethostname() == 'cam4':
         main.add_camera('cam4', 'uvch264src')
     elif socket.gethostname() == 'cam5':
