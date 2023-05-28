@@ -9,20 +9,11 @@ gi.require_version('GstVideo', '1.0')
 
 from gi.repository import GObject, Gst, GstRtspServer, GstVideo, GLib, GObject
 
-def _unlink(what):
-    try:
-        os.unlink(what)
-    except FileNotFoundError:
-        return
-
 class Camera:
     def __init__(self, name, settings):
         self.name = name
         self.timer = 0
         self.key_count = 0
-
-        vidsocket = '/tmp/%sv' % name
-        _unlink(vidsocket)
 
         if settings['video_source'] == 'rpicamsrc':
             self.framerate = 0
@@ -36,14 +27,13 @@ class Camera:
 
         self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
             'video/x-h264, stream-format=byte-stream, alignment=au ! '
-            'rtph264pay mtu=4294967295 ! '
-            'shmsink socket-path=%s async=0 qos=0 sync=0 wait-for-connection=0 shm-size=%d' %
-            (cam, vidsocket, 128 << 20)))
+            'interpipesink name=%s qos=false blocksize=-1' %
+            (cam, name)))
 
-        vidshmsrc = ('shmsrc name=camsrc is-live=1 do-timestamp=1 socket-path=%s ! '
-                     'application/x-rtp ! rtph264depay ! h264parse config-interval=-1 ! '
-                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, framerate=%d/1'
-                     % (vidsocket, self.framerate))
+        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=bytes do-timestamp=0 stream-sync=compensate-ts blocksize=-1 ! '
+                     'h264parse config-interval=-1 ! '
+                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=high'
+                     % (name))
         sndshmsrc = settings['audio_pipe']
 
         self.initialize_streams(vidshmsrc, sndshmsrc)
