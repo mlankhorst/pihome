@@ -19,6 +19,7 @@ class Controller:
         Gst.init(sys.argv)
         self.mainloop = GLib.MainLoop()
         self.socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(('', 6780))
         self.socket.listen(8)
         self.socket.setblocking(0)
