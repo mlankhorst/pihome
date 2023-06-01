@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import sys, gi, os, socket, time, subprocess
+import sys, gi, os, socket, time, subprocess, io
 
 gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
@@ -25,12 +25,14 @@ class Camera:
             self.framerate = 50
             cam = self.libcamerasrc()
 
-        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
+        print("Camera pipeline: " + cam)
+
+        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! queue ! '
             'video/x-h264, stream-format=byte-stream, alignment=au ! '
-            'interpipesink name=%s qos=false blocksize=-1' %
+            'interpipesink name=%s qos=false blocksize=-1 async=false drop=false max-buffers=0' %
             (cam, name)))
 
-        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=bytes do-timestamp=0 stream-sync=compensate-ts blocksize=-1 ! '
+        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time do-timestamp=0 stream-sync=compensate-ts blocksize=-1 ! '
                      'h264parse config-interval=-1 ! '
                      'video/x-h264, stream-format=byte-stream, alignment=au, profile=high'
                      % (name))
@@ -56,17 +58,25 @@ class Camera:
                 'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=nal, profile=high, framerate=%d/1' %
                 (self.framerate))
 
-    def libcamerasrc(self):
-        proc = subprocess.Popen(['/usr/bin/libcamera-vid', '--width', '1920', '--height', '1080',
-                                '--hflip', '--vflip', '--profile', 'high', '--level', '4.2', '--inline', '-t', '0', '-o-'],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    def libcamerafdsrc(self):
+        sock, other = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        proc = subprocess.Popen(['/usr/bin/libcamera-vid', '--nopreview', '--width', '1920', '--height', '1080',
+                                '--rotation', '180', '--profile', 'high', '--level', '4.2', '--inline',
+                                '--buffer-count', str(5 if self.framerate > 30 else 3),
+                                '-g', '%d' % (self.framerate / 4), '--framerate', str(self.framerate), '-t', '0', '-o-'],
+                                stdin=subprocess.DEVNULL, stdout=other, stderr=subprocess.PIPE)
+        other.close()
+        # Keepalive the newly created process and our socket by adding reference in class
         self.proc = proc
-        return ('fdsrc fd=%d' % (proc.stdout.fileno()))
-        # libcamera's gstreamer module does not support everything we need right now, so we use the workaround above.
-        return ('libcamerasrc name=livesrc ! video/x-raw, width=1920, height=1080,'
+        self.sock = sock
+        return ('fdsrc fd=%d ! video/x-h264, profile=high, width=1920, height=1080, stream-format=byte-stream, '
+                'level=(string)4.2, framerate=%d/1 ' % (sock.fileno(), self.framerate))
+
+    def libcamerasrc(self):
+        # libcamera's gstreamer module does not support everything we need right now, so please use the workaround above.
+        return ('libcamerasrc name=livesrc hflip=1 vflip=1 ! video/x-raw, width=1920, height=1080,'
                 ' framerate=%d/1, colorimetry=(string)bt709, interlace-mode=progressive, format=NV12 ! '
-                'v4l2convert extra-controls=controls,horizontal_flip=1,vertical_flip=1 ! '
-                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 !'
+                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 min-force-key-unit-interval=500000000 ! '
                 'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, level=(string)4.2 ' %
                 (self.framerate))
 
@@ -148,6 +158,14 @@ class Camera:
                     if new == Gst.State.PLAYING and self.timer <= 0:
                         self.timer = GLib.timeout_add_seconds(3, self.send_keyframe)
             elif event.type == Gst.MessageType.EOS:
+                if self.proc is not None:
+                    with io.BufferedReader(self.proc.stderr) as stderr:
+                        while True:
+                            line = stderr.readline()
+                            if not line:
+                                break
+                            print(line)
+
                 self.shutdown()
             else:
                 print('Camera event: ', event.type)
@@ -215,7 +233,7 @@ class Camera:
     def startstream(self, url, text):
         try:
             cam = self.cam.get_by_name('livesrc')
-            if text:
+            if cam and text:
                 cam.set_property('annotation-mode', 1)
                 cam.set_property('annotation-text', text)
         except TypeError:
@@ -229,7 +247,8 @@ class Camera:
     def stopstream(self):
         try:
             cam = self.cam.get_by_name('livesrc')
-            cam.set_property('annotation-mode', 0)
+            if cam:
+                cam.set_property('annotation-mode', 0)
         except TypeError:
             pass
 
@@ -338,6 +357,8 @@ class Camera:
             subprocess.call(['v4l2-ctl', '-d', dev, '-c', '%s=%s' % (key, value)])
         else:
             cam = self.cam.get_by_name('rpicamsrc')
+            if not cam:
+                return
 
             try:
                 val = int(value)
