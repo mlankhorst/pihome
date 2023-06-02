@@ -22,17 +22,17 @@ class Camera:
             self.framerate = 30
             cam = self.uvch264src()
         elif settings['video_source'] == 'libcamerasrc':
-            self.framerate = 50
+            self.framerate = 10
             cam = self.libcamerasrc()
 
         print("Camera pipeline: " + cam)
 
-        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! queue ! '
+        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
             'video/x-h264, stream-format=byte-stream, alignment=au ! '
-            'interpipesink name=%s qos=false blocksize=-1 async=false drop=false max-buffers=0' %
+            'interpipesink name=%s qos=false blocksize=262144 async=false drop=false max-buffers=0 processing-deadline=1000000000' %
             (cam, name)))
 
-        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time do-timestamp=0 stream-sync=compensate-ts blocksize=-1 ! '
+        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time do-timestamp=0 stream-sync=compensate-ts blocksize=262144 max-bytes=0 ! '
                      'h264parse config-interval=-1 ! '
                      'video/x-h264, stream-format=byte-stream, alignment=au, profile=high'
                      % (name))
@@ -108,7 +108,7 @@ class Camera:
                 % vidsrc))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
-        vidpipe = vidsrc + ' ! rtph264pay name=pay0'
+        vidpipe = vidsrc + ' ! queue ! rtph264pay name=pay0'
         if sndsrc:
             sndpipe = sndsrc + ' name=pay1'
         else:
@@ -156,7 +156,7 @@ class Camera:
                         _unlink(shmsink.get_property('socket-path'))
 
                     if new == Gst.State.PLAYING and self.timer <= 0:
-                        self.timer = GLib.timeout_add_seconds(3, self.send_keyframe)
+                        self.timer = GLib.timeout_add(500, self.send_keyframe)
             elif event.type == Gst.MessageType.EOS:
                 if self.proc is not None:
                     with io.BufferedReader(self.proc.stderr) as stderr:
