@@ -22,25 +22,32 @@ class Camera:
             self.framerate = 30
             cam = self.uvch264src()
         elif settings['video_source'] == 'libcamerasrc':
-            self.framerate = 10
+            self.framerate = 25
             cam = self.libcamerasrc()
 
         print("Camera pipeline: " + cam)
 
         self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
-            'video/x-h264, stream-format=byte-stream, alignment=au ! '
-            'interpipesink name=%s qos=false blocksize=262144 async=false drop=false max-buffers=0 processing-deadline=1000000000' %
+            'video/x-h264, stream-format=byte-stream, alignment=au ! queue ! '
+            'interpipesink name=%s blocksize=0 drop=false max-buffers=0 processing-deadline=5000000000' %
             (cam, name)))
 
-        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time do-timestamp=0 stream-sync=compensate-ts blocksize=262144 max-bytes=0 ! '
-                     'h264parse config-interval=-1 ! '
-                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=high'
-                     % (name))
+        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time stream-sync=restart-ts blocksize=0 max-bytes=0 ! '
+                     'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, framerate=%d/1'
+                     % (name, self.framerate))
         sndshmsrc = settings['audio_pipe']
+
+        # To get fps output with the below line uncommented: GST_DEBUG=fpsdisplaysink:6
+        if False:
+            self.fpsdbg = Gst.parse_launch(('%s ! fpsdisplaysink text-overlay=false '
+                                            'signal-fps-measurements=true '
+                                            'video-sink=fakesink' % (vidshmsrc)))
+        else:
+            self.fpsdbg = None
 
         self.initialize_streams(vidshmsrc, sndshmsrc)
         if sndshmsrc:
-            sndshmsrc += ' ! ' + settings['audiopay']
+            sndshmsrc += ' ! queue ! ' + settings['audiopay']
         self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
     def uvch264src(self):
@@ -74,11 +81,12 @@ class Camera:
 
     def libcamerasrc(self):
         # libcamera's gstreamer module does not support everything we need right now, so please use the workaround above.
-        return ('libcamerasrc name=livesrc hflip=1 vflip=1 ! video/x-raw, width=1920, height=1080,'
-                ' framerate=%d/1, colorimetry=(string)bt709, interlace-mode=progressive, format=NV12 ! '
-                'v4l2h264enc extra-controls=controls,repeat_sequence_header=1 min-force-key-unit-interval=500000000 ! '
+        return ('libcamerasrc name=livesrc hflip=1 vflip=1 ! '
+                'video/x-raw, width=1920, height=1080, framerate=%d/1, format=NV12, '
+                'colorimetry=(string)bt709, interlace-mode=progressive ! '
+                'v4l2h264enc qos=true extra-controls=controls,h264_i_frame_period=%d,video_gop_size=%d,h264_minimum_qp_value=28 ! '
                 'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, level=(string)4.2 ' %
-                (self.framerate))
+                (self.framerate, (int)(self.framerate/2), (int)(self.framerate/2)))
 
     def initialize_streams(self, vidsrc, sndsrc):
         if sndsrc:
@@ -108,32 +116,30 @@ class Camera:
                 % vidsrc))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
-        vidpipe = vidsrc + ' ! queue ! rtph264pay name=pay0'
+        vidpipe = vidsrc + ' ! h264parse ! queue ! rtph264pay name=pay0'
         if sndsrc:
             sndpipe = sndsrc + ' name=pay1'
         else:
             sndpipe = ''
 
         full_stream = GstRtspServer.RTSPMediaFactory()
-        #full_stream.set_shared(True)
-        full_stream.set_latency(100)
-        full_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
-        full_stream.set_eos_shutdown(False)
+        full_stream.set_latency(600)
+        full_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.RESET)
         full_stream.set_launch(vidpipe + ' ' + sndpipe)
         full_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s' % self.name, full_stream)
 
         vidonly_stream = GstRtspServer.RTSPMediaFactory()
         #vidonly_stream.set_shared(True)
-        vidonly_stream.set_latency(100)
-        vidonly_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
-        vidonly_stream.set_eos_shutdown(False)
+        vidonly_stream.set_latency(600)
+        vidonly_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.RESET)
         vidonly_stream.set_launch(vidpipe)
         vidonly_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s.m4v' % self.name, vidonly_stream)
 
     def media_configure(self, mediafactory, media):
         print("Request for media configure\n")
+        self.send_keyframe()
 
     def cam_message(self, obj, event):
         if event.src == self.cam:
@@ -156,7 +162,8 @@ class Camera:
                         _unlink(shmsink.get_property('socket-path'))
 
                     if new == Gst.State.PLAYING and self.timer <= 0:
-                        self.timer = GLib.timeout_add(500, self.send_keyframe)
+                        #self.timer = GLib.timeout_add(500, self.send_keyframe)
+                        pass
             elif event.type == Gst.MessageType.EOS:
                 if self.proc is not None:
                     with io.BufferedReader(self.proc.stderr) as stderr:
@@ -271,6 +278,8 @@ class Camera:
         self.stream.get_bus().add_signal_watch()
 
         self.cam.set_state(Gst.State.PLAYING)
+        if self.fpsdbg is not None:
+            self.fpsdbg.set_state(Gst.State.PLAYING)
 
     def night_mode(self):
         cam = self.cam.get_by_name('livesrc')
