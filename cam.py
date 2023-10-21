@@ -14,6 +14,7 @@ class Camera:
         self.name = name
         self.timer = 0
         self.key_count = 0
+        self.source = settings['video_source']
 
         if settings['video_source'] == 'rpicamsrc':
             self.framerate = 0
@@ -22,17 +23,17 @@ class Camera:
             self.framerate = 30
             cam = self.uvch264src()
         elif settings['video_source'] == 'libcamerasrc':
-            self.framerate = 25
+            self.framerate = 30
             cam = self.libcamerasrc()
 
         print("Camera pipeline: " + cam)
 
-        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! '
-            'video/x-h264, stream-format=byte-stream, alignment=au ! queue ! '
-            'interpipesink name=%s blocksize=0 drop=false max-buffers=0 processing-deadline=5000000000' %
+        self.cam = Gst.parse_launch(('%s ! h264parse config-interval=-1 ! h264timestamper ! '
+            'video/x-h264, stream-format=byte-stream, alignment=au ! '
+            'interpipesink name=%s blocksize=0 max-lateness=2000000000 max-buffers=0 processing-deadline=5000000000 buffer-list=1 ' %
             (cam, name)))
 
-        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time stream-sync=restart-ts blocksize=0 max-bytes=0 ! '
+        vidshmsrc = ('interpipesrc listen-to=%s is-live=1 format=time stream-sync=restart-ts blocksize=0 max-time=2000000000 leaky-type=downstream ! '
                      'video/x-h264, stream-format=byte-stream, alignment=au, profile=high, framerate=%d/1'
                      % (name, self.framerate))
         sndshmsrc = settings['audio_pipe']
@@ -52,8 +53,8 @@ class Camera:
 
     def uvch264src(self):
         return ('uvch264src auto-start=1 mode=2 rate-control=vbr'
-                ' iframe-period=500 post-previews=0 initial-bitrate=250000 '
-                ' peak-bitrate=250000 average-bitrate=100000 name=livesrc '
+                ' iframe-period=500 post-previews=0 initial-bitrate=2500000 '
+                ' peak-bitrate=2500000 average-bitrate=1000000 name=livesrc '
                 'livesrc.vfsrc ! image/jpeg,framerate=%d/1 ! '
                 'fakesink sync=0 qos=0 async=0 '
                 'livesrc.vidsrc ! '
@@ -81,7 +82,7 @@ class Camera:
 
     def libcamerasrc(self):
         # libcamera's gstreamer module does not support everything we need right now, so please use the workaround above.
-        return ('libcamerasrc name=livesrc hflip=1 vflip=1 ! '
+        return ('libcamerasrc name=livesrc hflip=1 vflip=1 ae-flicker-mode=1 ae-flicker-custom-period=10000 auto-focus-mode=AfModeContinuous ! '
                 'video/x-raw, width=1920, height=1080, framerate=%d/1, format=NV12, '
                 'colorimetry=(string)bt709, interlace-mode=progressive ! '
                 'v4l2h264enc qos=true extra-controls=controls,h264_i_frame_period=%d,video_gop_size=%d,h264_minimum_qp_value=28 ! '
@@ -116,29 +117,31 @@ class Camera:
                 % vidsrc))
 
     def initialize_rtsp(self, rtsp, vidsrc, sndsrc):
-        vidpipe = vidsrc + ' ! h264parse ! queue ! rtph264pay name=pay0'
+        vidpipe = vidsrc + ' ! h264parse config-interval=-1 ! queue ! rtph264pay name=pay0'
         if sndsrc:
             sndpipe = sndsrc + ' name=pay1'
         else:
             sndpipe = ''
 
         full_stream = GstRtspServer.RTSPMediaFactory()
-        full_stream.set_latency(600)
-        full_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.RESET)
+        full_stream.set_latency(0)
+        full_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
         full_stream.set_launch(vidpipe + ' ' + sndpipe)
         full_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s' % self.name, full_stream)
 
         vidonly_stream = GstRtspServer.RTSPMediaFactory()
         #vidonly_stream.set_shared(True)
-        vidonly_stream.set_latency(600)
-        vidonly_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.RESET)
+        vidonly_stream.set_latency(0)
+        vidonly_stream.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
         vidonly_stream.set_launch(vidpipe)
         vidonly_stream.connect('media-configure', self.media_configure)
         rtsp.get_mount_points().add_factory('/%s.m4v' % self.name, vidonly_stream)
 
     def media_configure(self, mediafactory, media):
         print("Request for media configure\n")
+        media.set_rate_control(False)
+        media.set_publish_clock_mode(GstRtspServer.RTSPPublishClockMode.NONE)
         self.send_keyframe()
 
     def cam_message(self, obj, event):
@@ -161,8 +164,8 @@ class Camera:
                         shmsink = self.cam.get_by_name('shmsink')
                         _unlink(shmsink.get_property('socket-path'))
 
-                    if new == Gst.State.PLAYING and self.timer <= 0:
-                        #self.timer = GLib.timeout_add(500, self.send_keyframe)
+                    if new == Gst.State.PLAYING and self.timer <= 0 and self.source == 'uvcvideo':
+                        self.timer = GLib.timeout_add(500, self.send_keyframe)
                         pass
             elif event.type == Gst.MessageType.EOS:
                 if self.proc is not None:
@@ -307,8 +310,8 @@ class Camera:
             cam.set_property('shutter-speed', 250000) # in us
 
     def day_mode(self):
-        cam = self.cam.get_by_name('uvch264src')
-        if cam:
+        cam = self.cam.get_by_name('livesrc')
+        if self.source == 'uvch264src':
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
@@ -316,9 +319,7 @@ class Camera:
                              'gain=255,focus_auto=0,exposure_auto=3')])
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30'])
-        else:
-            cam = self.cam.get_by_name('rpicamsrc')
-
+        elif source == 'rpicamsrc':
             cam.set_property('saturation', 0)
             cam.set_property('brightness', 50)
             cam.set_property('contrast', 0)
@@ -333,7 +334,7 @@ class Camera:
 
     def shimmer_mode(self):
         cam = self.cam.get_by_name('livesrc')
-        if cam:
+        if self.source == 'uvch264src':
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
@@ -341,7 +342,7 @@ class Camera:
                              'gain=255,focus_auto=0,exposure_auto=1')])
             subprocess.call(['v4l2-ctl', '-d', dev, '-c',
                              'focus_absolute=30,exposure_absolute=2047'])
-        else:
+        elif source == 'rpicamsrc':
             cam = self.cam.get_by_name('rpicamsrc')
 
             cam.set_property('saturation', -100)
@@ -359,16 +360,15 @@ class Camera:
             cam.set_property('shutter-speed', 0) # variable
 
     def setprop(self, key, value):
-        cam = self.cam.get_by_name('uvch264src')
-        if cam:
+        cam = self.cam.get_by_name('livesrc')
+        if not cam:
+            return
+
+        if self.source == 'uvch264src':
             dev = cam.get_property('device')
 
             subprocess.call(['v4l2-ctl', '-d', dev, '-c', '%s=%s' % (key, value)])
         else:
-            cam = self.cam.get_by_name('rpicamsrc')
-            if not cam:
-                return
-
             try:
                 val = int(value)
             except ValueError:
