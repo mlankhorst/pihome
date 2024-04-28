@@ -21,7 +21,7 @@ class Camera:
             cam = self.rpicamsrc()
         elif settings['video_source'] == 'uvch264src':
             self.framerate = 30
-            cam = self.uvch264src()
+            cam = self.uvch264src(settings['device'])
         elif settings['video_source'] == 'libcamerasrc':
             self.framerate = 30
             cam = self.libcamerasrc()
@@ -51,15 +51,18 @@ class Camera:
             sndshmsrc += ' ! queue ! ' + settings['audiopay']
         self.initialize_rtsp(settings['rtsp'], vidshmsrc, sndshmsrc)
 
-    def uvch264src(self):
-        return ('uvch264src auto-start=1 mode=2 rate-control=vbr'
+    def uvch264src(self, device):
+        devstr = ''
+        if device:
+            devstr = f' device={device} '
+        return ('uvch264src auto-start=1 mode=2 rate-control=vbr %s '
                 ' iframe-period=500 post-previews=0 initial-bitrate=2500000 '
                 ' peak-bitrate=2500000 average-bitrate=1000000 name=livesrc '
                 'livesrc.vfsrc ! image/jpeg,framerate=%d/1 ! '
                 'fakesink sync=0 qos=0 async=0 '
                 'livesrc.vidsrc ! '
                 'video/x-h264, stream-format=byte-stream, width=1280, height=720, alignment=au, profile=high, framerate=%d/1' %
-               (self.framerate, self.framerate))
+               (devstr, self.framerate, self.framerate))
 
     def rpicamsrc(self):
         return ('rpicamsrc rotation=180 preview=0 bitrate=0 sensor-mode=5 quantisation-parameter=20 name=livesrc ! '

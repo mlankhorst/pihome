@@ -46,8 +46,8 @@ class Controller:
 
         self.cams = []
 
-    def add_camera(self, name, type):
-        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'audiopay' : self.audiopay, 'video_source' : type})
+    def add_camera(self, name, type, device = None):
+        cam = Camera(name, { 'rtsp' : self.rtsp_server, 'audio_pipe' : self.audio_pipe, 'audiopay' : self.audiopay, 'video_source' : type, 'device' : device})
         self.cams.append(cam)
 
         return cam
@@ -206,7 +206,8 @@ if __name__ == '__main__':
         main.add_camera('cam2', 'libcamerasrc')
     elif socket.gethostname() == 'cam0':
         main.add_camera('cam0', 'libcamerasrc')
-        main.add_camera('cam1', 'uvch264src')
+        main.add_camera('cam1', 'uvch264src', '/dev/video2')
+        main.add_camera('cam2', 'uvch264src', '/dev/video0')
     elif socket.gethostname() == 'cam4':
         main.add_camera('cam4', 'uvch264src')
     elif socket.gethostname() == 'cam5':
