@@ -15,6 +15,7 @@ class Camera:
         self.timer = 0
         self.key_count = 0
         self.source = settings['video_source']
+        self.proc = None
 
         if settings['video_source'] == 'rpicamsrc':
             self.framerate = 0
